@@ -315,6 +315,42 @@ duplicating, so this works fine from cron.
 
 ---
 
+## Publishing to GitHub Pages
+
+```bash
+./deploy.sh              # publish what is in web/
+./deploy.sh --fetch      # refresh the data first, then publish
+```
+
+Live at <https://dusky-nembrotha.github.io/uk-bird-map/>.
+
+Everything in `web/` is pushed to the `gh-pages` branch as a single commit that
+replaces the one before it, so `main` stays code-only and repeated deploys do
+not grow the repository — the exported JSON is rewritten each time rather than
+piling up in history. Pages serves it gzipped, so the 17 MB `sightings.json`
+reaches the browser as roughly 4 MB.
+
+The published site is a snapshot, not a feed: it shows whatever was in
+`web/data` when you last deployed. Run `./deploy.sh --fetch` to move it on.
+
+Two things differ from running locally, because Pages serves static files and
+has no Python behind them:
+
+- **Video export** falls back to in-browser WebM capture. The studio detects
+  this by itself (`/api/capabilities` is absent) and hides the mp4 and gif
+  options. Browser capture timestamps frames by wall clock, so a heavy render
+  comes out slower than the frame rate asks for — for a frame-accurate mp4,
+  render locally with ffmpeg installed.
+- **Species photos** are fetched straight from iNaturalist rather than through
+  the `/api/photo` proxy. The photos on their CORS-enabled host appear as
+  normal; those on the host that sends no CORS header do not load, which is
+  deliberate — loading them would taint the canvas and break frame export.
+
+Note that a Pages site is public even if its repository is private: private
+Pages is a GitHub Enterprise feature.
+
+---
+
 ## Adding a county blog
 
 Most UK county sightings pages are on Blogger or WordPress and have a feed. Add

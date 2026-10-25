@@ -79,6 +79,7 @@ const PALETTES = {
 const state = {
   data: null, geo: null, cities: null, weather: null,
   caps: { ffmpeg: false, formats: [] },
+  backend: false,    // false on a static host: no render API, no photo proxy
   records: [],        // prepared, time-sorted
   t0: 0, t1: 0,       // clip span, ms
   playing: false,
@@ -1485,7 +1486,13 @@ function defaultTitle() {
    hosts sends no CORS header, and drawing such an image into the canvas
    taints it, which makes the frame export throw. */
 function proxiedPhoto(url) {
-  return url ? '/api/photo?u=' + encodeURIComponent(url) : '';
+  if (!url) return '';
+  // No proxy on a static host. crossOrigin stays set, so a photo from the
+  // host that does send CORS headers loads and the canvas stays exportable;
+  // one from the host that doesn't simply fails to load, which is a better
+  // trade than tainting the canvas and breaking the export outright.
+  if (!state.backend) return url;
+  return '/api/photo?u=' + encodeURIComponent(url);
 }
 
 const speciesPhotos = [];
@@ -3167,8 +3174,12 @@ async function boot() {
   }
   try {
     state.caps = await fetch('/api/capabilities').then((r) => r.json());
+    state.backend = true;
   } catch (e) {
+    // Served from a static host (GitHub Pages), so there is no API behind us:
+    // export falls back to in-browser capture and photos are fetched direct.
     state.caps = { ffmpeg: false, formats: [] };
+    state.backend = false;
   }
 
   if (!state.weather) {
