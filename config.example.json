@@ -1,0 +1,37 @@
+{
+  "ebird_api_token": "PUT_YOUR_EBIRD_KEY_HERE",
+
+  "region": "europe",
+
+  "days_back": 14,
+
+  "sources": {
+    "ebird": true,
+    "inaturalist": true,
+    "birdweather": true,
+    "gbif": true,
+    "blogs": true,
+    "bluesky": true,
+    "countyrecorders": true
+  },
+
+  "birdweather": {
+    "high_confidence": true,
+    "min_confidence": 0.8,
+    "max_species_per_station": 60,
+    "max_pages": 2000
+  },
+
+  "inaturalist": {
+    "max_pages": 320,
+    "quality_grade": "research,needs_id"
+  },
+
+  "gbif": {
+    "max_records": 60000,
+    "max_pages": 400,
+    "days_back": 30
+  },
+
+  "user_agent": "UK-Nature-Map/1.0 (personal bird sightings map; you@example.com)"
+}

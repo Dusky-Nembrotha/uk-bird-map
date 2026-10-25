@@ -1,0 +1,23 @@
+# Your eBird API key lives here - keep it out of version control.
+config.json
+
+# Generated data
+data/sightings.db
+data/sightings.db-wal
+data/sightings.db-shm
+data/sightings.geojson
+data/cache/
+data/gazetteer_src/
+web/data/sightings.json
+web/data/geo.json
+web/data/cities.json
+web/data/weather.json
+data/geo_src/
+data/renders/
+
+__pycache__/
+*.pyc
+.backup/
+
+# Downloaded observation photos (cached from iNaturalist etc.)
+data/photos/

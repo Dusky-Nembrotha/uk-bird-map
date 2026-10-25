@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en-GB" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>UK Bird Map — tiles</title>
+<meta name="description" content="Recent bird sightings across the UK, gathered from eBird, iNaturalist, BirdWeather, GBIF and county birding blogs.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app" class="viz-root">
+
+  <aside id="sidebar" aria-label="Filters and summary">
+
+    <button id="sheet-handle" class="sheet-handle" type="button"
+            aria-expanded="false" aria-controls="sidebar">
+      <span class="grip" aria-hidden="true"></span>
+      <span class="sheet-summary">
+        <strong id="sheet-count">—</strong>
+        <span id="sheet-sub">sightings nearby</span>
+      </span>
+      <span class="sheet-chevron" aria-hidden="true">⌃</span>
+    </button>
+
+    <header class="panel head">
+      <div class="title-row">
+        <h1><span class="l1">UK Bird <em>Map</em></span></h1>
+        <span class="head-actions">
+          <a class="icon-btn" href="index.html" title="Animation view"
+             aria-label="Animation view">▶</a>
+          <button id="theme-toggle" class="icon-btn" type="button"
+                  title="Switch between light and dark" aria-label="Switch theme">◐</button>
+        </span>
+      </div>
+      <p class="hero"><span id="stat-records">—</span></p>
+      <p class="hero-label"><span id="stat-window">sightings</span> ·
+        <span id="stat-species">—</span> species ·
+        <span id="stat-sites">—</span> places</p>
+    </header>
+
+    <section class="panel">
+      <h2>When</h2>
+      <div id="date-presets" class="presets" role="group" aria-label="Date range"></div>
+      <label class="slider-row">
+        <span class="muted small">From <strong id="date-from-label">—</strong></span>
+        <input id="date-from" type="range" min="0" max="0" value="0" step="1">
+      </label>
+    </section>
+
+    <section class="panel">
+      <div class="h2-row">
+        <h2>Most reported <span id="scope-label" class="scope">here</span></h2>
+        <button id="species-clear" class="text-btn" type="button" hidden>Clear</button>
+      </div>
+      <div id="site-detail" hidden></div>
+      <ol id="species-top" class="toplist"></ol>
+      <div class="combo">
+        <input id="species-search" type="text" role="combobox" aria-expanded="false"
+               aria-controls="species-list" aria-autocomplete="list"
+               autocomplete="off" placeholder="Search any species…"
+               aria-label="Search species">
+        <button id="species-search-clear" class="combo-clear" type="button"
+                hidden aria-label="Clear species">✕</button>
+        <ul id="species-list" class="combo-list" role="listbox" hidden></ul>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Where it comes from</h2>
+      <ul id="source-list" class="checklist"></ul>
+      <label class="check"><input type="checkbox" id="only-notable">
+        <span>Only rare &amp; unusual <span class="star" aria-hidden="true">★</span></span></label>
+      <label class="check"><input type="checkbox" id="hide-approx">
+        <span>Only exact locations</span></label>
+    </section>
+
+    <section class="panel">
+      <details id="map-options">
+        <summary><h2>Map options</h2></summary>
+        <div class="opts">
+          <label class="field"><span>Colour</span>
+            <select id="colour-by">
+              <option value="species" selected>By species</option>
+              <option value="recency">How recent</option>
+              <option value="source">Where it came from</option>
+              <option value="single">One colour</option>
+            </select>
+          </label>
+          <label class="field"><span>Backdrop</span>
+            <select id="basemap">
+              <option value="plain">Plain</option>
+              <option value="street">Street</option>
+              <option value="terrain">Terrain</option>
+              <option value="satellite" selected>Satellite</option>
+              <option value="ocean">Ocean floor</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="glow-toggle" checked>
+            <span>Glowing marks</span></label>
+          <label class="check"><input type="checkbox" id="cluster-toggle" checked>
+            <span>Group nearby records</span></label>
+          <button id="table-toggle" class="text-btn" type="button"
+                  aria-expanded="false">Show as a table</button>
+        </div>
+      </details>
+      <div id="legend" class="legend" aria-live="polite"></div>
+    </section>
+
+    <footer class="panel foot">
+      <p><a class="studio-link" href="index.html">Open the animation view →</a></p>
+      <p class="muted small" id="stat-generated">Loading…</p>
+      <p class="muted small">Records from eBird, iNaturalist, BirdWeather, GBIF
+        and county birding blogs. Sound-recorder and blog records are less
+        precise than a birder's checklist — each pin says which it is.</p>
+    </footer>
+  </aside>
+
+  <main id="map-wrap">
+    <div id="map"></div>
+    <div id="loading" class="overlay">
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Gathering sightings…</p>
+    </div>
+    <button id="sidebar-toggle" class="icon-btn floating" type="button"
+            aria-label="Show or hide the panel">☰</button>
+  </main>
+
+  <section id="table-panel" hidden aria-label="Sightings table">
+    <div class="table-head">
+      <h2>Sightings on screen <span class="muted small" id="table-note"></span></h2>
+      <button id="table-close" class="icon-btn" type="button" aria-label="Close table">✕</button>
+    </div>
+    <div class="table-scroll">
+      <table id="table">
+        <thead><tr>
+          <th scope="col">Species</th><th scope="col">How many</th>
+          <th scope="col">Date</th><th scope="col">Place</th>
+          <th scope="col">Source</th><th scope="col">Precision</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="combobox.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

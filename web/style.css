@@ -1,0 +1,533 @@
+/* UK Bird Sightings.
+
+   Dark is the default surface because the data reads best on it - glowing
+   marks on a near-black canvas, the way the night side of the earth looks
+   from orbit. Light mode is a selected set of steps from the same ramps, not
+   an inversion.
+
+   Colour roles follow the project's data-viz palette: a single-hue sequential
+   ramp for recency, the first three categorical slots for source identity,
+   and the reserved status red for notable records. */
+
+.viz-root {
+  color-scheme: dark;
+  color: var(--text-primary);
+  --surface-1: #1a1a19;
+  --surface-2: #222221;
+  --plane: #0d0d0d;
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --gridline: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, .10);
+  --accent: #a9e34b;
+  --sheet-peek: 74px;
+
+  --rec-1: #cde2fb;
+  --rec-2: #9ec5f4;
+  --rec-3: #6da7ec;
+  --rec-4: #3987e5;
+  --rec-5: #184f95;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-other: #898781;
+
+  --status-critical: #d03b3b;
+  --shadow: 0 1px 3px rgba(0,0,0,.5), 0 8px 28px rgba(0,0,0,.45);
+}
+
+:root[data-theme="light"] .viz-root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --surface-2: #f4f3f0;
+  --plane: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --gridline: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, .10);
+  --accent: #4a7c12;
+
+  --rec-1: #104281;
+  --rec-2: #1c5cab;
+  --rec-3: #2a78d6;
+  --rec-4: #5598e7;
+  --rec-5: #86b6ef;
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+
+  --shadow: 0 1px 3px rgba(11,11,11,.12), 0 8px 24px rgba(11,11,11,.10);
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0; height: 100%;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* The palette lives on .viz-root, which is a descendant, so these two
+     variables are undefined here. Without a fallback `color` resolves to
+     black and every element inside that does not set its own colour inherits
+     it - which is how the headline count came to be painted in exactly the
+     panel's background colour. */
+  font-size: 15px; color: var(--text-primary, #f0efec);
+  background: var(--plane, #0d0d0d);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
+
+/* ---------------------------------------------------------------- sidebar */
+
+#sidebar {
+  width: 348px; flex: 0 0 348px; height: 100%; overflow-y: auto;
+  background: var(--surface-1); border-right: 1px solid var(--border);
+  scrollbar-width: thin; scrollbar-color: var(--axis) transparent;
+}
+#sidebar.hidden { display: none; }
+#sidebar::-webkit-scrollbar { width: 8px; }
+#sidebar::-webkit-scrollbar-thumb { background: var(--axis); border-radius: 4px; }
+
+.panel { padding: 16px 18px; border-bottom: 1px solid var(--gridline); }
+.panel.head { padding: 20px 18px 14px; }
+.panel.foot { border-bottom: 0; }
+
+h1 {
+  font-size: 23px; font-weight: 300; margin: 0; line-height: 1.12;
+  letter-spacing: -.02em; color: var(--text-primary);
+}
+h1 em { font-style: normal; font-weight: 650; color: var(--accent); }
+h1 { display: flex; align-items: center; gap: 9px; }
+h1 .logo { width: 26px; height: 26px; flex: 0 0 auto;
+  fill: var(--accent); stroke: none; }
+h1 .l1 { display: block; }     /* two lines on desktop, one on a phone */
+
+h2 { font-size: 10.5px; font-weight: 650; text-transform: uppercase;
+     letter-spacing: .09em; color: var(--text-muted); margin: 0 0 10px; }
+.h2-row { display: flex; align-items: baseline; justify-content: space-between; }
+.h2-row h2 { margin-bottom: 10px; }
+
+.title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+
+.hero { font-size: 40px; font-weight: 300; margin: 14px 0 0; line-height: 1;
+        letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
+.hero-label { margin: 7px 0 0; font-size: 12.5px; color: var(--text-secondary); }
+.muted { color: var(--text-muted); }
+.small { font-size: 11.5px; }
+p.small { margin: 8px 0 0; line-height: 1.5; }
+
+/* --------------------------------------------------------------- controls */
+
+.presets { display: flex; flex-direction: column; gap: 1px; margin-bottom: 12px; }
+.presets button {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px 9px; border: 0; border-radius: 7px; cursor: pointer;
+  background: transparent; color: var(--text-secondary); font: inherit;
+  font-size: 13px; text-align: left; transition: background .12s, color .12s;
+}
+.presets button:hover { background: var(--surface-2); color: var(--text-primary); }
+.presets button[aria-pressed="true"] { color: var(--text-primary); font-weight: 600;
+  background: var(--surface-2); }
+.presets button::before {
+  content: "✓"; width: 14px; font-weight: 700; font-size: 12px;
+  color: var(--accent); visibility: hidden;
+}
+.presets button[aria-pressed="true"]::before { visibility: visible; }
+.presets .cnt { margin-left: auto; color: var(--text-muted); font-size: 11.5px;
+                font-variant-numeric: tabular-nums; }
+
+.slider-row { display: block; border-top: 1px solid var(--gridline); padding-top: 11px; }
+.slider-row input { width: 100%; margin-top: 7px; accent-color: var(--accent); }
+
+.checklist, .specieslist, .toplist { list-style: none; margin: 0; padding: 0; }
+
+.check, .checklist label {
+  display: flex; align-items: center; gap: 9px; cursor: pointer;
+  font-size: 13px; padding: 5px 3px; border-radius: 6px;
+  color: var(--text-secondary); transition: background .12s, color .12s;
+}
+.check:hover, .checklist label:hover { background: var(--surface-2); color: var(--text-primary); }
+.check input, .checklist input { accent-color: var(--accent); margin: 0; flex: 0 0 auto; }
+.checklist .cnt { margin-left: auto; color: var(--text-muted); font-size: 11.5px;
+                  font-variant-numeric: tabular-nums; }
+.swatch { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.star { color: var(--status-critical); font-size: 12px; }
+
+/* The ranked species list: thumbnail, name, magnitude bar, count. */
+.toplist li { margin-bottom: 3px; }
+.toplist button {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px;
+  align-items: center; width: 100%; padding: 5px 7px 5px 5px;
+  background: transparent; border: 0; border-radius: 8px; cursor: pointer;
+  font: inherit; text-align: left; color: var(--text-primary);
+  transition: background .12s;
+}
+.toplist button:hover { background: var(--surface-2); }
+.toplist button.on { background: var(--surface-2); }
+.toplist .thumb {
+  width: 30px; height: 30px; border-radius: 7px; object-fit: cover;
+  background: var(--surface-2); display: block;
+}
+.toplist .thumb.empty { background: linear-gradient(135deg, var(--surface-2), var(--gridline)); }
+.toplist .name { font-size: 13px; line-height: 1.5; display: block;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toplist .bar { display: block; height: 3px; border-radius: 2px; margin-top: 8px;
+  background: var(--accent); opacity: .85; min-width: 2px; }
+.toplist .cnt { color: var(--text-muted); font-size: 11.5px;
+  font-variant-numeric: tabular-nums; }
+
+.field { display: flex; align-items: center; justify-content: space-between;
+         gap: 10px; font-size: 13px; margin-bottom: 9px; color: var(--text-secondary); }
+.field select, input[type="search"], .field input[type="number"], .field input[type="text"] {
+  font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 7px;
+  border: 1px solid var(--axis); background: var(--surface-2);
+  color: var(--text-primary); min-width: 0;
+}
+.field select { flex: 1 1 auto; max-width: 60%; }
+input[type="search"] { width: 100%; margin: 10px 0 0; }
+input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.icon-btn { background: transparent; border: 1px solid var(--border);
+  color: var(--text-secondary); border-radius: 7px; cursor: pointer;
+  width: 28px; height: 28px; font-size: 13px; line-height: 1; padding: 0;
+  flex: 0 0 auto; transition: background .12s, color .12s; }
+.icon-btn:hover { background: var(--surface-2); color: var(--text-primary); }
+.icon-btn.floating { position: absolute; top: 12px; left: 12px; z-index: 500;
+  width: 34px; height: 34px; background: var(--surface-1); box-shadow: var(--shadow); }
+
+.text-btn { background: transparent; border: 0; padding: 4px 0 0;
+  color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; }
+.text-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+.specieslist { max-height: 240px; overflow-y: auto; margin-top: 8px;
+  scrollbar-width: thin; }
+.specieslist li button {
+  display: flex; width: 100%; gap: 8px; align-items: baseline;
+  background: transparent; border: 0; border-radius: 6px; cursor: pointer;
+  padding: 5px 7px; font: inherit; font-size: 13px; text-align: left;
+  color: var(--text-secondary);
+}
+.specieslist li button:hover { background: var(--surface-2); color: var(--text-primary); }
+.specieslist li button.on { color: var(--text-primary); font-weight: 600; }
+.specieslist .sci { color: var(--text-muted); font-size: 11px; font-style: italic; }
+.specieslist .cnt { margin-left: auto; color: var(--text-muted); font-size: 11.5px;
+  font-variant-numeric: tabular-nums; }
+
+details#map-options summary { cursor: pointer; list-style: none; }
+details#map-options summary::-webkit-details-marker { display: none; }
+details#map-options summary h2::after { content: " ▸"; color: var(--text-muted); }
+details#map-options[open] summary h2::after { content: " ▾"; }
+.opts { padding-top: 4px; }
+
+/* ----------------------------------------------------------------- legend */
+
+.legend { margin-top: 12px; border-top: 1px solid var(--gridline); padding-top: 11px; }
+.legend-title { font-size: 10.5px; color: var(--text-muted); margin-bottom: 7px;
+  text-transform: uppercase; letter-spacing: .07em; }
+.legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px;
+  color: var(--text-secondary); margin-bottom: 5px; }
+.legend-ramp { display: flex; gap: 2px; margin: 5px 0 6px; }
+.legend-ramp span { height: 9px; flex: 1 1 0; border-radius: 2px; }
+.legend-ends { display: flex; justify-content: space-between; font-size: 11px;
+  color: var(--text-muted); }
+.legend-sizes { display: flex; align-items: flex-end; gap: 12px; margin-top: 10px; }
+.legend-sizes figure { margin: 0; text-align: center; }
+.legend-sizes .dot { display: block; margin: 0 auto 4px; border-radius: 50%;
+  background: var(--rec-3); opacity: .85; }
+.legend-sizes figcaption { font-size: 10px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; }
+
+/* -------------------------------------------------------------------- map */
+
+#map-wrap { position: relative; flex: 1 1 auto; height: 100%; }
+#map { position: absolute; inset: 0; background: var(--plane); }
+
+.overlay { position: absolute; inset: 0; z-index: 600; display: flex;
+  flex-direction: column; gap: 14px; align-items: center; justify-content: center;
+  background: var(--plane); color: var(--text-secondary); }
+.overlay[hidden] { display: none; }
+.spinner { width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--gridline); border-top-color: var(--accent);
+  animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(1turn); } }
+
+.cluster-icon {
+  display: grid; place-items: center; border-radius: 50%;
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: #0b0b0b;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 0 16px 2px rgba(110,167,236,.30);
+}
+.cluster-icon.dark-ink { color: #f0efec; }
+
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: var(--surface-1); color: var(--text-primary);
+  box-shadow: var(--shadow); border-radius: 10px;
+}
+.leaflet-popup-content { margin: 0; font-size: 13px; line-height: 1.45; width: 268px !important; }
+.pop { display: block; }
+.pop-photo { width: 100%; height: 108px; object-fit: cover; display: block;
+  border-radius: 10px 10px 0 0; background: var(--surface-2); }
+.pop-body { padding: 11px 13px 13px; }
+.pop-sp { font-weight: 650; font-size: 15px; letter-spacing: -.01em; }
+.pop-sci { font-style: italic; color: var(--text-muted); font-size: 11.5px; }
+.pop-row { color: var(--text-secondary); margin-top: 4px; }
+.pop-row b { color: var(--text-primary); font-weight: 600; }
+.pop-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 9px;
+  font-size: 11px; color: var(--text-secondary); }
+.pop-note { margin-top: 7px; font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+.pop-credit { margin-top: 6px; font-size: 9.5px; color: var(--text-muted); }
+
+/* The species tally inside a cluster popup. */
+.pop-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.pop-list li { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto;
+  gap: 8px; align-items: center; padding: 2px 0; font-size: 12.5px; }
+.pop-list .swatch { width: 9px; height: 9px; border-radius: 50%; }
+.pop-list-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-primary); }
+.pop-list-n { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.pop-cluster .pop-badge { flex-wrap: wrap; }
+.leaflet-container a.pop-link { display: inline-block; margin-top: 9px;
+  font-size: 12px; color: var(--accent); }
+.leaflet-control-attribution { background: rgba(0,0,0,.45) !important;
+  color: var(--text-muted) !important; font-size: 10px !important; }
+.leaflet-control-attribution a { color: var(--text-secondary) !important; }
+:root[data-theme="light"] .leaflet-control-attribution {
+  background: rgba(255,255,255,.75) !important; }
+
+/* ------------------------------------------------------------------ table */
+
+#table-panel {
+  position: fixed; inset: auto 0 0 0; height: 46vh; z-index: 700;
+  background: var(--surface-1); border-top: 1px solid var(--axis);
+  box-shadow: var(--shadow); display: flex; flex-direction: column;
+}
+#table-panel[hidden] { display: none; }
+.table-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 16px; border-bottom: 1px solid var(--gridline); }
+.table-head h2 { margin: 0; }
+.table-scroll { overflow: auto; flex: 1 1 auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 7px 16px; border-bottom: 1px solid var(--gridline);
+  white-space: nowrap; color: var(--text-secondary); }
+th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-muted);
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; z-index: 1; }
+td.num { font-variant-numeric: tabular-nums; }
+
+/* ------------------------------------------------------- site detail card */
+
+.scope { font-weight: 500; letter-spacing: 0; text-transform: none;
+  color: var(--text-muted); }
+
+#site-detail {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 11px 12px; margin-bottom: 11px;
+}
+#site-detail[hidden] { display: none !important; }
+.site-name { font-size: 14px; font-weight: 650; letter-spacing: -.01em;
+  color: var(--text-primary); margin-bottom: 7px; }
+.site-stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 7px; }
+.site-stats span { font-size: 11.5px; color: var(--text-muted); }
+.site-stats b { font-size: 14px; font-weight: 650; color: var(--text-primary);
+  font-variant-numeric: tabular-nums; margin-right: 3px; }
+.site-row { font-size: 11.5px; line-height: 1.5; color: var(--text-secondary); }
+.site-row b { color: var(--text-primary); }
+.site-row.muted { color: var(--text-muted); }
+
+/* Selected-species chips, with the bird alongside its name. */
+.sp-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.sp-chips[hidden] { display: none !important; }
+.sp-chip { display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 4px 3px 3px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 12px; color: var(--text-primary); }
+.sp-chip img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+.sp-chip-dot { width: 22px; height: 22px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--gridline), var(--axis)); }
+.sp-chip button { border: 0; background: transparent; cursor: pointer;
+  color: var(--text-muted); font-size: 11px; padding: 0 3px; line-height: 1; }
+.sp-chip button:hover { color: var(--text-primary); }
+.combo-item.chosen { background: var(--surface-2); }
+.combo-item.chosen .combo-label::after { content: " ✓"; color: var(--accent); }
+/* Why a bird is near the top of the list: how far its reporting rate moved
+   week on week. Green for arriving, warm for leaving - the same two readings
+   the suggestions panel uses. */
+.combo-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.combo-meta .combo-sub { min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.combo-move { flex: 0 0 auto; font-size: 10.5px; font-variant-numeric: tabular-nums;
+  padding: 1px 5px; border-radius: 999px; white-space: nowrap; }
+.combo-move.up { color: #9fd98c; background: rgba(159, 217, 140, .13); }
+.combo-move.down { color: #e3a08c; background: rgba(227, 160, 140, .13); }
+
+/* ------------------------------------------------------------- combobox
+   The species type-ahead, shared by the map and the studio. */
+
+.combo { position: relative; flex: 1 1 auto; min-width: 0; }
+.field .combo { max-width: 60%; }
+.combo > input {
+  width: 100%; padding: 7px 28px 7px 9px; font: inherit; font-size: 13px;
+  border-radius: 7px; border: 1px solid var(--axis);
+  background: var(--surface-2); color: var(--text-primary);
+}
+.combo > input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.combo-clear {
+  position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+  width: 20px; height: 20px; border: 0; border-radius: 50%; cursor: pointer;
+  background: var(--gridline); color: var(--text-secondary);
+  font-size: 11px; line-height: 1; padding: 0;
+}
+.combo-clear:hover { background: var(--axis); color: var(--text-primary); }
+
+.combo-list {
+  position: absolute; z-index: 60; top: calc(100% + 5px); left: 0; right: 0;
+  max-height: 320px; overflow-y: auto; list-style: none; margin: 0; padding: 4px;
+  background: var(--surface-1); border: 1px solid var(--axis);
+  border-radius: 11px; box-shadow: var(--shadow); scrollbar-width: thin;
+}
+.combo-item {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 9px;
+  align-items: center; padding: 6px 8px; border-radius: 8px; cursor: pointer;
+}
+.combo-item:hover, .combo-item.active { background: var(--surface-2); }
+.combo-thumb { width: 28px; height: 28px; border-radius: 7px; object-fit: cover;
+  background: var(--surface-2); display: block; }
+.combo-thumb.empty { background: linear-gradient(135deg, var(--surface-2), var(--gridline)); }
+.combo-text { min-width: 0; }
+.combo-label { display: block; font-size: 13px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
+.combo-sub { display: block; font-size: 10.5px; font-style: italic;
+  color: var(--text-muted); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.combo-count { font-size: 11.5px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; }
+.combo-empty { padding: 10px 9px; font-size: 12.5px; color: var(--text-muted); }
+
+/* Leaflet's own controls, themed. */
+.leaflet-bar, .leaflet-bar a {
+  background: var(--surface-1); color: var(--text-primary);
+  border-color: var(--border);
+}
+.leaflet-bar a:hover { background: var(--surface-2); color: var(--text-primary); }
+.leaflet-bar a.leaflet-disabled { background: var(--surface-1); color: var(--text-muted); }
+.leaflet-bar { box-shadow: var(--shadow); border-radius: 8px; overflow: hidden; }
+.leaflet-touch .leaflet-bar a:first-child { border-radius: 8px 8px 0 0; }
+.leaflet-touch .leaflet-bar a:last-child { border-radius: 0 0 8px 8px; }
+
+/* ------------------------------------------------------------- the sheet
+   On a phone the filter panel is a bottom sheet rather than a sidebar: the
+   map stays visible and in reach, and the panel is pulled up when wanted.
+   The handle is the collapsed state - it shows the live count, so the sheet
+   is useful even shut. */
+
+.sheet-handle { display: none; }
+
+@media (max-width: 760px) {
+  html, body { overscroll-behavior: none; }
+
+  #app { display: block; }
+
+  #map-wrap { position: fixed; inset: 0; height: 100%; }
+  #map { inset: 0; }
+
+  /* Keep Leaflet's own furniture clear of the sheet and the notch. */
+  .leaflet-top { top: env(safe-area-inset-top, 0px); }
+  .leaflet-control-zoom { margin-top: 10px !important; margin-left: 10px !important; }
+  .leaflet-control-zoom a {
+    width: 40px !important; height: 40px !important;
+    line-height: 40px !important; font-size: 20px !important;
+  }
+  .leaflet-bottom { bottom: calc(var(--sheet-peek) + env(safe-area-inset-bottom, 0px)); }
+
+  #sidebar {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    width: 100%; flex: none;
+    height: min(84vh, 680px);
+    border-right: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -10px 34px rgba(0, 0, 0, .55);
+    transform: translateY(calc(100% - var(--sheet-peek) - env(safe-area-inset-bottom, 0px)));
+    transition: transform .3s cubic-bezier(.32, .72, 0, 1);
+    z-index: 800;
+    overscroll-behavior: contain;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  #sidebar.sheet-open { transform: translateY(0); }
+  #sidebar.hidden { display: block; }      /* desktop toggle must not hide it */
+
+  .sheet-handle {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 10px;
+    position: sticky; top: 0; z-index: 3;
+    width: 100%;
+    padding: 14px 18px 12px;
+    background: var(--surface-1);
+    border: 0; border-radius: 20px 20px 0 0;
+    cursor: pointer; font: inherit; text-align: left;
+    color: var(--text-primary);
+    min-height: var(--sheet-peek);
+  }
+  .sheet-handle .grip {
+    position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
+    width: 38px; height: 4px; border-radius: 2px; background: var(--axis);
+  }
+  .sheet-summary { display: flex; align-items: baseline; gap: 7px;
+    font-size: 14px; color: var(--text-secondary); }
+  .sheet-summary strong { font-size: 19px; font-weight: 650;
+    color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .sheet-chevron { font-size: 17px; color: var(--text-muted);
+    transition: transform .3s cubic-bezier(.32,.72,0,1); line-height: 1; }
+  #sidebar.sheet-open .sheet-chevron { transform: rotate(180deg); }
+
+  /* The header is redundant once the handle carries the headline number. */
+  .panel.head .hero, .panel.head .hero-label { display: none; }
+  .panel.head { padding: 10px 18px 12px; }
+  h1 { font-size: 18px; }
+  h1 .l1 { display: inline; }
+
+  /* Touch targets. */
+  .presets button { padding: 11px 10px; font-size: 14px; }
+  .check, .checklist label { padding: 10px 4px; font-size: 14px; }
+  .toplist button { padding: 9px 8px 9px 6px;
+    grid-template-columns: 36px minmax(0, 1fr) auto; }
+  .toplist .thumb { width: 36px; height: 36px; }
+  .toplist .name { font-size: 14px; }
+  .field { margin-bottom: 12px; font-size: 14px; }
+  .field select, input[type="search"] { padding: 9px 10px; font-size: 15px; }
+  .combo > input { font-size: 16px; padding: 10px 30px 10px 11px; }
+  .combo-list { max-height: 50vh; }
+  .combo-item { padding: 9px 8px; }
+  .field .combo { max-width: 60%; }
+  .icon-btn { width: 34px; height: 34px; }
+
+  /* The desktop collapse button has no job once there is a sheet. */
+  #sidebar-toggle { display: none; }
+
+  #table-panel { height: 72vh; border-radius: 18px 18px 0 0; z-index: 850; }
+  th, td { padding: 9px 12px; }
+  .leaflet-popup-content { width: 240px !important; }
+}
+
+@media (max-width: 380px) {
+  .toplist .name { font-size: 12.5px; }
+  .sheet-summary strong { font-size: 17px; }
+}
+
+/* OpenTopoMap has no dark edition; shift it behind the marks in dark mode. */
+#map.dark-tiles .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.85) saturate(.7);
+}
+
+.head-actions { display: flex; gap: 6px; }
+.head-actions a.icon-btn { display: grid; place-items: center; text-decoration: none; }
+.studio-link { color: var(--accent); text-decoration: none; font-size: 13px;
+  font-weight: 600; }
+.studio-link:hover { text-decoration: underline; text-underline-offset: 2px; }
