@@ -1648,12 +1648,14 @@ const MIN_KEY = 'panelMin';
    anything is moved, so putting them back is exact rather than approximate. */
 let _controlHomes = null;
 
-/* What stays reachable when the sheet is down. The species picker rather
-   than the group dropdown: a group is a starting point you set once, whereas
-   which bird you are looking at is the thing you keep changing. The chips come
-   with it, or the folded bar would not show what is currently selected. */
+/* What stays reachable when the sheet is down. The group was left out at
+   first, on the reasoning that it is a starting point you set once - but it
+   is the broadest way to change what the clip is about, and leaving it in the
+   panel meant lifting the whole sheet to swap waders for raptors. The chips
+   come with the picker, or the folded bar would not show what is selected. */
 function basicControls() {
-  return [$('o-species-input').closest('.field'),
+  return [$('o-group').closest('.field'),
+          $('o-species-input').closest('.field'),
           $('o-species-chips'),
           $('o-from').closest('.field')].filter(Boolean);
 }
@@ -1708,6 +1710,18 @@ function syncMiniPlaceholder() {
   input.placeholder = names.length
     ? (names.length > 2 ? `${names[0]} + ${names.length - 1} more` : names.join(', '))
     : (grp ? grp.label : 'All species');
+}
+
+/* The ✕ beside the species box resets the subject rather than just emptying
+   the text. It has to: with the sheet folded the box carries the selection as
+   its placeholder and the group sits beside it, so a clear that left the group
+   standing would look like it had done nothing. */
+function resetSubject() {
+  $('o-species').value = '';
+  loadSpeciesPhotos([]);
+  applyGroup('');          // also re-prepares the records and the picker
+  syncMiniPlaceholder();
+  $('o-species').dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 function moveBasicControls(toMini) {
@@ -2829,6 +2843,8 @@ function populateControls() {
     multi: true,
     photoUrl: proxiedPhoto,
     placeholder: 'All species — type to search',
+    hasExtra: () => !!state.group,
+    onClear: resetSubject,
     getItems: () => (state.groupSet
       ? speciesItems.filter((it) => state.groupSet.has(it.idx))
       : speciesItems),

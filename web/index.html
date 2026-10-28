@@ -55,7 +55,7 @@
     <section class="panel">
       <details class="sect" id="sect-the-subject" open>
         <summary><h2>The subject</h2></summary>
-      <label class="field"><span>Group</span>
+      <label class="field groupfield"><span>Group</span>
         <select id="o-group"><option value="">All birds</option></select>
       </label>
       <div class="field"><span>Species</span>
@@ -65,7 +65,8 @@
                  aria-autocomplete="list" autocomplete="off"
                  placeholder="All species — type to search">
           <button id="o-species-clear" class="combo-clear" type="button"
-                  hidden aria-label="Clear species">✕</button>
+                  hidden title="Clear the group and species"
+                  aria-label="Clear the group and species">✕</button>
           <ul id="o-species-list" class="combo-list" role="listbox" hidden></ul>
         </div>
       </div>

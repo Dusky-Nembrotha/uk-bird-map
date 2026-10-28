@@ -327,9 +327,11 @@ button.ghost:hover { background: var(--surface-2); color: var(--text-primary); }
     backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
     border: 1px solid rgba(255, 255, 255, .11);
   }
-  /* Two rows, not four: the species box and the expand arrow share the top
-     line, the dates have the second, and the chips are replaced by the box's
-     own placeholder. */
+  /* Three rows, not six: the species box and the expand arrow share the top
+     line, the group has the second and the dates the third, and the chips are
+     replaced by the box's own placeholder. The group earns a row of its own -
+     'Phylloscopus warblers' set beside the species box would leave neither
+     of them readable. */
   body.panel-min #mini-bar {
     flex-direction: row; flex-wrap: wrap; align-items: center;
     gap: 7px; padding: 6px 8px;
@@ -339,7 +341,11 @@ button.ghost:hover { background: var(--surface-2); color: var(--text-primary); }
   }
   /* The label is dead weight down here - the placeholder says what it is. */
   body.panel-min #mini-bar .field > span:first-child { display: none; }
-  body.panel-min #mini-bar .field.daterange { flex: 1 1 100%; order: 3; }
+  body.panel-min #mini-bar .field.groupfield { flex: 1 1 100%; order: 3; }
+  /* The label is hidden down here, so the select takes the whole row; the
+     60% cap it wears in the panel exists to leave room for that label. */
+  body.panel-min #mini-bar .field.groupfield select { max-width: none; }
+  body.panel-min #mini-bar .field.daterange { flex: 1 1 100%; order: 4; }
   body.panel-min #mini-bar .sp-chips { display: none !important; }
 
   /* Still an arrow, just no longer hidden on the grip: centred at the top of

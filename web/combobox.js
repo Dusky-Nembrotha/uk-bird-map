@@ -16,6 +16,12 @@
 function makeCombobox(cfg) {
   const { input, listEl, getItems, onSelect } = cfg;
   const clearBtn = cfg.clearBtn || null;
+  /* What the ✕ can clear may not be in the box at all: a multi-select keeps
+     its picks in chips, and a caller may own a wider filter (the studio's
+     group dropdown) that the ✕ should reset too. Without this the button
+     hid itself precisely when the box looked empty but a filter was still
+     in force - which is the one time you most need it. */
+  const hasExtra = cfg.hasExtra || (() => false);
   const maxShown = cfg.maxShown || 60;
   const emptyLabel = cfg.emptyLabel || 'No species match that.';
 
@@ -92,7 +98,12 @@ function makeCombobox(cfg) {
       });
       listEl.appendChild(li);
     });
-    if (clearBtn) clearBtn.hidden = !input.value;
+    syncClear();
+  }
+
+  function syncClear() {
+    if (!clearBtn) return;
+    clearBtn.hidden = !(input.value || selected.length || hasExtra());
   }
 
   function escapeHtml(s) {
@@ -123,7 +134,7 @@ function makeCombobox(cfg) {
     }
     input.value = it.label;
     setOpen(false);
-    if (clearBtn) clearBtn.hidden = !input.value;
+    syncClear();
     onSelect(it);
   }
 
@@ -148,6 +159,7 @@ function makeCombobox(cfg) {
     }
     input.placeholder = selected.length
       ? 'Add another species…' : (cfg.placeholder || input.placeholder);
+    syncClear();
   }
 
   function scrollActiveIntoView() {
@@ -183,9 +195,15 @@ function makeCombobox(cfg) {
   if (clearBtn) {
     clearBtn.addEventListener('click', () => {
       input.value = '';
-      clearBtn.hidden = true;
+      // A multi-select's picks live in `selected`, so clearing only the text
+      // left every chip standing - and handed onSelect a null that the
+      // list-expecting callers could not read.
+      selected = [];
+      renderChips();
       setOpen(false);
-      onSelect(null);
+      if (cfg.onClear) cfg.onClear();
+      else onSelect(multi ? [] : null);
+      syncClear();
     });
   }
 
@@ -197,7 +215,7 @@ function makeCombobox(cfg) {
     refresh: render,
     setValue(label) {
       input.value = label || '';
-      if (clearBtn) clearBtn.hidden = !input.value;
+      syncClear();
     },
     getSelection: () => selected.slice(),
     setSelection(values) {
