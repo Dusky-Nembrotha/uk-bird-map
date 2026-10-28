@@ -1902,9 +1902,14 @@ function openSheet(id, save = true) {
    becomes a drawer (theatre, search) or a rail of cards (dashboard). */
 const LAYOUT_SLOTS = {
   sidebar: {},
-  theatre: { toolbar: ['species', 'chips', 'dates'] },
+  /* The group travels with the species picker in every layout. It was left out
+     of theatre and search at first on the grounds that it is set once and then
+     forgotten - which was wrong twice over: it is the quickest way to change
+     what the clip is about, and in theatre (the default) that left no way to
+     reach it at all without opening the drawer. */
+  theatre: { toolbar: ['group', 'species', 'chips', 'dates'] },
   dashboard: { toolbar: ['group', 'species', 'chips', 'dates'] },
-  search: { 'search-pill': ['species', 'chips'] },
+  search: { 'search-pill': ['group', 'species', 'chips'] },
 };
 
 function applyLayout(key, refit = true) {

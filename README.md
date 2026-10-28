@@ -116,6 +116,27 @@ Not every record means the same thing, and each popup says which it is:
 
 "Only exact locations" drops everything that isn't a precise fix.
 
+### Marks
+
+**Map options → Marks** swaps how the records are drawn. The default is the
+grouped discs; the six alternatives come from the design study in
+`web/mockups/`, ported to a Leaflet canvas layer in `web/treatments.js`.
+
+| Marks | What it shows |
+|---|---|
+| **Grouped discs** | the original clusters, with a count in each |
+| **Hex density field** | equal-area cells, quantile-stepped — the count belongs to the ground, not the zoom |
+| **Density as relief** | a kernel surface cut into bands, isoline on each break |
+| **The swell** | bands of latitude as ridges, near occluding far |
+| **One mark per record** | no aggregation; waders, wildfowl and raptors by hue |
+| **The recording network** | ground nearest each site — the observers, not the birds |
+| **Rarities lit up** | notable records lit, the rest left as grey texture |
+
+The treatments draw to one canvas with no hit targets of its own, so clicking
+the map opens the nearest record within about 26px rather than a marker's own
+popup. Colour, glow and grouping belong to the discs and are disabled while a
+treatment is showing. The choice is kept in the URL (`#view=hex`).
+
 ---
 
 ## The animation view

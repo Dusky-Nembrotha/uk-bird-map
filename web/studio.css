@@ -578,6 +578,7 @@ body[data-layout="theatre"] #toolbar {
 #toolbar .sp-chips { display: none !important; }
 #toolbar .combo-list { max-height: 46vh; }
 #toolbar select { max-width: none; }
+#toolbar .field.groupfield select { min-width: 164px; }
 
 /* Search: the map and one box, in the middle of the top edge. */
 body[data-layout="search"] #search-pill {
@@ -588,6 +589,10 @@ body[data-layout="search"] #search-pill {
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
 #search-pill .field { flex: 1 1 auto; margin: 0; min-width: 0; }
+/* The group keeps the pill a pill: a fixed, smaller share of it, so the
+   species box it sits beside is still the thing you reach for. */
+#search-pill .field.groupfield { flex: 0 1 148px; }
+#search-pill .field.groupfield select { border-radius: 999px; padding-left: 13px; }
 #search-pill .field > span:first-child { display: none; }
 #search-pill .field .combo { max-width: none; }
 #search-pill .combo > input { border-radius: 999px; padding-left: 14px; }

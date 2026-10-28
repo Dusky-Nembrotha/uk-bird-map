@@ -81,6 +81,7 @@ const state = {
   hideApprox: false,
   colourBy: 'species',
   cluster: true,
+  view: 'clusters',      // or one of the TREATMENTS keys
   search: '',
   basemap: 'satellite',
   glow: true,
@@ -101,6 +102,7 @@ function cssVar(name) {
 /* -------------------------------------------------------------------- map */
 
 let map, canvasRenderer, clusterLayer, plainLayer, baseLayer, labelLayer;
+let treatmentLayer = null;
 
 /* Leaflet's canvas renderer draws flat discs. Setting a shadow before the
    fill gives the marks the same bloom the studio uses, which is what makes a
@@ -142,6 +144,34 @@ function initMap() {
     iconCreateFunction: clusterIcon,
   });
   plainLayer = L.layerGroup();
+
+  treatmentLayer = new TreatmentLayer({
+    draw: (ctx, W, H) => drawTreatment(ctx, W, H),
+  });
+
+  /* The treatments draw to a canvas with no hit targets of its own, so the
+     map keeps its click behaviour by hand: the nearest record within a
+     thumb's reach of the pointer. Without this, switching away from the discs
+     would silently cost you every popup on the page. */
+  map.on('click', (e) => {
+    if (state.view === 'clusters' || !state.mercator) return;
+    const p = map.latLngToContainerPoint(e.latlng);
+    const size = map.getSize();
+    const pts = trProject(map, state.data, state.visible,
+                          state.mercator.nx, state.mercator.ny, size.x, size.y, 40);
+    let best = -1, bd = 26 * 26;
+    for (let k = 0; k < pts.n; k++) {
+      const dx = pts.x[k] - p.x, dy = pts.y[k] - p.y;
+      const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = pts.i[k]; }
+    }
+    if (best < 0) return;
+    const rec = state.data.recs[best];
+    L.popup({ maxWidth: 280, autoPanPadding: [36, 36], closeButton: true })
+      .setLatLng([rec[LAT], rec[LON]])
+      .setContent(popupHtml(rec))
+      .openOn(map);
+  });
   setBasemap(state.basemap);
 }
 
@@ -412,8 +442,44 @@ function applyFilters() {
 
 /* ---------------------------------------------------------------- drawing */
 
+/* What the current treatment last reported about itself - counts the legend
+   needs and cannot work out on its own. */
+let treatmentStats = {};
+
+function drawTreatment(ctx, W, H) {
+  if (state.view === 'clusters' || !state.data || !state.mercator) return;
+  const pts = trProject(map, state.data, state.visible,
+                        state.mercator.nx, state.mercator.ny, W, H, 60);
+  const accent = cssVar('--accent') || '#a9e34b';
+  const fn = {
+    hex: () => trHex(ctx, W, H, pts),
+    relief: () => trRelief(ctx, W, H, pts),
+    ridge: () => trRidge(ctx, W, H, pts),
+    dots: () => trDots(ctx, W, H, pts, state.data, state.speciesClass),
+    cells: () => trCells(ctx, W, H, pts, state.data),
+    rare: () => trRare(ctx, W, H, pts, state.data, accent),
+  }[state.view];
+  treatmentStats = (fn ? fn() : {}) || {};
+  treatmentStats.shown = pts.n;
+  renderLegend();
+}
+
 function draw() {
   const recs = state.data.recs;
+
+  if (state.view !== 'clusters') {
+    // The discs and the treatments are alternatives, not layers: leaving the
+    // markers underneath would put the clustering artefact straight back on
+    // top of the thing that replaces it.
+    clusterLayer.clearLayers();
+    plainLayer.clearLayers();
+    if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
+    if (map.hasLayer(plainLayer)) map.removeLayer(plainLayer);
+    if (!map.hasLayer(treatmentLayer)) map.addLayer(treatmentLayer);
+    else treatmentLayer.redraw();
+    return;
+  }
+  if (map.hasLayer(treatmentLayer)) map.removeLayer(treatmentLayer);
   const ring = cssVar('--surface-1');
   const critical = cssVar('--status-critical');
 
@@ -729,8 +795,51 @@ function renderSiteDetail() {
     + `${esc(oldest)} to ${esc(newest)}</div>`;
 }
 
+const TR_LEGEND_NOTE = {
+  hex: 'Equal-area cells, quantile steps. The count belongs to the ground, not'
+     + ' to the zoom level.',
+  relief: 'A kernel density surface cut into bands, with an isoline on each'
+        + ' break. Closer lines mean a steeper gradient.',
+  ridge: 'Each ridge is one band of latitude, read west to east; near ridges'
+       + ' occlude far ones.',
+  cells: 'Ground nearest each recording site, shaded by what that site'
+       + ' reports. This maps the observers, not the birds.',
+};
+
+function treatmentLegend() {
+  const kind = (TREATMENTS[state.view] || {}).legend;
+  const note = TR_LEGEND_NOTE[state.view];
+  let html = `<div class="legend-title">${esc(TREATMENTS[state.view].label)}</div>`;
+
+  if (kind === 'ramp') {
+    html += '<div class="legend-ramp">'
+      + TR_RAMP.map((c) => `<span style="background:${c}"></span>`).join('')
+      + '</div><div class="legend-ends"><span>few</span><span>many</span></div>';
+  } else if (kind === 'groups') {
+    const c = treatmentStats.counts || [0, 0, 0];
+    html += TR_GROUPS.map((g, i) =>
+      `<div class="legend-row"><span class="swatch" style="background:${TR_CAT[i]}"></span>`
+      + `${esc(g.label)} <span class="muted">${fmt(c[i] || 0)}</span></div>`).join('')
+      + `<div class="legend-row"><span class="swatch" style="background:${TR_OTHER}"></span>`
+      + `All other species <span class="muted">${fmt(treatmentStats.other || 0)}</span></div>`
+      + '<div class="legend-row muted small">Three hues is the cap for marks that'
+      + ' can land beside any other. The scarcest group is drawn last, so the'
+      + ' counts are here in case the top hue looks commoner than it is.</div>';
+  } else {
+    html += `<div class="legend-row"><span class="swatch" style="background:${cssVar('--accent')}"></span>`
+      + `Notable record <span class="muted">${fmt(treatmentStats.notable || 0)}</span></div>`
+      + `<div class="legend-row"><span class="swatch" style="background:${TR_OTHER}"></span>`
+      + 'Everything else</div>';
+  }
+  if (note) html += `<div class="legend-row muted small">${note}</div>`;
+  html += '<div class="legend-row muted small">Click the map for the nearest'
+        + ' record.</div>';
+  return html;
+}
+
 function renderLegend() {
   const box = $('legend');
+  if (state.view !== 'clusters') { box.innerHTML = treatmentLegend(); return; }
   let html;
   if (state.colourBy === 'species') {
     const d = state.data;
@@ -818,6 +927,7 @@ function writeHash() {
   if (state.colourBy !== 'species') p.set('colour', state.colourBy);
   if (!state.glow) p.set('glow', '0');
   if (!state.cluster) p.set('cluster', '0');
+  if (state.view !== 'clusters') p.set('view', state.view);
   if (state.basemap !== 'satellite') p.set('base', state.basemap);
   if (!$('table-panel').hidden) p.set('table', '1');
   if (document.documentElement.dataset.theme === 'light') p.set('theme', 'light');
@@ -850,6 +960,8 @@ function readHash() {
   }
   state.glow = p.get('glow') !== '0';
   state.cluster = p.get('cluster') !== '0';
+  const v = p.get('view');
+  if (v && TREATMENTS[v]) state.view = v;
   if (BASEMAPS[p.get('base')]) state.basemap = p.get('base');
   if (p.get('table') === '1') {
     $('table-panel').hidden = false;
@@ -867,6 +979,11 @@ function readHash() {
   $('hide-approx').checked = state.hideApprox;
   $('colour-by').value = state.colourBy;
   $('cluster-toggle').checked = state.cluster;
+  $('view-mode').value = state.view;
+  const discs = state.view === 'clusters';
+  $('cluster-toggle').disabled = !discs;
+  $('glow-toggle').disabled = !discs;
+  $('colour-by').disabled = !discs;
   $('glow-toggle').checked = state.glow;
   $('basemap').value = state.basemap;
   restoring = false;
@@ -974,6 +1091,17 @@ function initControls() {
   $('hide-approx').onchange = (e) => { state.hideApprox = e.target.checked; refresh(); };
   $('colour-by').onchange = (e) => { state.colourBy = e.target.value; refresh(); };
   $('cluster-toggle').onchange = (e) => { state.cluster = e.target.checked; refresh(); };
+  $('view-mode').onchange = (e) => {
+    state.view = e.target.value;
+    // Grouping and glow belong to the discs; the treatments do their own
+    // thing, so the controls that no longer apply say so rather than lying.
+    const discs = state.view === 'clusters';
+    $('cluster-toggle').disabled = !discs;
+    $('glow-toggle').disabled = !discs;
+    $('colour-by').disabled = !discs;
+    refresh();
+    writeHash();
+  };
   $('glow-toggle').onchange = (e) => { state.glow = e.target.checked; refresh(); };
   $('species-clear').onclick = () => {
     state.species = null;
@@ -1041,6 +1169,10 @@ async function boot() {
   }
 
   const d = state.data;
+  // Mercator per record and the group each species belongs to: both are fixed
+  // for the life of the page, and both are needed before the first paint.
+  state.mercator = trMercator(d.recs);
+  state.speciesClass = trClassify(d.species);
   d.sources.forEach((_, i) => state.sources.add(i));
   rankSources();
   // Open on the last few days: it is what people mean by "right now", and it
