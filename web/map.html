@@ -52,33 +52,6 @@
     </section>
 
     <section class="panel">
-      <div class="h2-row">
-        <h2>Most reported <span id="scope-label" class="scope">here</span></h2>
-        <button id="species-clear" class="text-btn" type="button" hidden>Clear</button>
-      </div>
-      <div id="site-detail" hidden></div>
-      <ol id="species-top" class="toplist"></ol>
-      <div class="combo">
-        <input id="species-search" type="text" role="combobox" aria-expanded="false"
-               aria-controls="species-list" aria-autocomplete="list"
-               autocomplete="off" placeholder="Search any species…"
-               aria-label="Search species">
-        <button id="species-search-clear" class="combo-clear" type="button"
-                hidden aria-label="Clear species">✕</button>
-        <ul id="species-list" class="combo-list" role="listbox" hidden></ul>
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2>Where it comes from</h2>
-      <ul id="source-list" class="checklist"></ul>
-      <label class="check"><input type="checkbox" id="only-notable">
-        <span>Only rare &amp; unusual <span class="star" aria-hidden="true">★</span></span></label>
-      <label class="check"><input type="checkbox" id="hide-approx">
-        <span>Only exact locations</span></label>
-    </section>
-
-    <section class="panel">
       <details id="map-options" open>
         <summary><h2>Map options</h2></summary>
         <div class="opts">
@@ -120,6 +93,34 @@
       </details>
       <div id="legend" class="legend" aria-live="polite"></div>
     </section>
+
+    <section class="panel">
+      <div class="h2-row">
+        <h2>Most reported <span id="scope-label" class="scope">here</span></h2>
+        <button id="species-clear" class="text-btn" type="button" hidden>Clear</button>
+      </div>
+      <div id="site-detail" hidden></div>
+      <ol id="species-top" class="toplist"></ol>
+      <div class="combo">
+        <input id="species-search" type="text" role="combobox" aria-expanded="false"
+               aria-controls="species-list" aria-autocomplete="list"
+               autocomplete="off" placeholder="Search any species…"
+               aria-label="Search species">
+        <button id="species-search-clear" class="combo-clear" type="button"
+                hidden aria-label="Clear species">✕</button>
+        <ul id="species-list" class="combo-list" role="listbox" hidden></ul>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Where it comes from</h2>
+      <ul id="source-list" class="checklist"></ul>
+      <label class="check"><input type="checkbox" id="only-notable">
+        <span>Only rare &amp; unusual <span class="star" aria-hidden="true">★</span></span></label>
+      <label class="check"><input type="checkbox" id="hide-approx">
+        <span>Only exact locations</span></label>
+    </section>
+
 
     <footer class="panel foot">
       <p><a class="studio-link" href="index.html">Open the animation view →</a></p>
