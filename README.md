@@ -116,35 +116,27 @@ Not every record means the same thing, and each popup says which it is:
 
 "Only exact locations" drops everything that isn't a precise fix.
 
-### Marks
+### How the marks are coloured
 
-**Map options → Marks** swaps how the records are drawn. The default is the
-grouped discs; the six alternatives come from the design study in
-`web/mockups/`, ported to a Leaflet canvas layer in `web/treatments.js`.
+**Map options → Colour** defaults to **Heat — how busy**: every record takes
+its colour from how many records sit within about 5km of it, in quantile steps
+over whatever is currently filtered in. Clusters read on the same ramp, so
+zooming in and watching a disc break apart does not change the colour language.
 
-| Marks | What it shows |
-|---|---|
-| **Grouped discs** | the original clusters, with a count in each |
-| **Hex density field** | equal-area cells, quantile-stepped — the count belongs to the ground, not the zoom |
-| **Density as relief** | a kernel surface cut into bands, isoline on each break |
-| **The swell** | bands of latitude as ridges, near occluding far |
-| **One mark per record** | no aggregation; waders, wildfowl and raptors by hue |
-| **The recording network** | ground nearest each site — the observers, not the birds |
-| **Rarities lit up** | notable records lit, the rest left as grey texture |
-| **Species richness** | distinct species per cell, not records — one long checklist stops lighting a cell |
-| **Site rosettes** | one spoke per species at that exact coordinate, ordered by group |
-| **Coveys** | each record scattered inside a disc around its own point, so a stack reads as a stack |
+The ramp is a heat ramp — six steps, generated in OKLCH over a 66° hue span
+with lightness strictly rising. Sequential magnitude normally wants one hue;
+semantic heat is the documented exception, which is why a scale legend is not
+optional here. The low step deliberately does not recede into the basemap: a
+record is a discrete fact, not a field, and every step clears 2:1 on mid-tone
+green. On pale ground the dark ring each mark carries does the separating.
 
-The last three exist because the first six do not address the shape of this
-data. 72% of records share a coordinate with another record and 7% of the
-points carry 60% of the records — one eBird checklist is forty species at one
-lat/lon, and Landguard Point is 419 records and 106 species on a single pixel.
-Spread that over a hex grid and it is one bright cell.
+Marks are small — 2.8px for a single bird, 11px for a flock of a thousand.
+Area still carries the count, over a much shorter range than before, so nothing
+is big enough to hide the ground it sits on.
 
-The treatments draw to one canvas with no hit targets of its own, so clicking
-the map opens everything logged at that coordinate — the whole stack, via the
-same summary the clusters use — rather than a marker's own popup. Colour, glow and grouping belong to the discs and are disabled while a
-treatment is showing. The choice is kept in the URL (`#view=hex`).
+`web/mockups/` is a design study of six other ways of drawing this data —
+hex fields, contours, ridgelines, tessellations. None of them were adopted;
+the page is kept as a record of what was tried.
 
 ---
 

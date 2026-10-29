@@ -30,6 +30,22 @@
   --rec-4: #3987e5;
   --rec-5: #184f95;
 
+  /* Heat. Sequential magnitude is normally one hue, light to dark; a heat
+     ramp is the documented exception - analogous neighbours reading as
+     temperature - and it ships with a scale legend for exactly that reason.
+     Generated in OKLCH over a 66 degree hue span, lightness strictly rising.
+     The low step deliberately does NOT recede: these are discrete records on
+     satellite imagery, not a field on a dark panel, and a record that fades
+     into the ground is a record you cannot see. Every step clears 2:1 on
+     mid-tone green; on pale ground the dark ring each mark carries does the
+     separating. */
+  --heat-1: #b95858;
+  --heat-2: #e36241;
+  --heat-3: #ff7600;
+  --heat-4: #ff9900;
+  --heat-5: #ffc136;
+  --heat-6: #ffe784;
+
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
@@ -57,6 +73,15 @@
   --rec-3: #2a78d6;
   --rec-4: #5598e7;
   --rec-5: #86b6ef;
+
+  /* The same ramp run the other way: on a pale basemap the hot end has to be
+     the dark end or the busiest ground would be the least legible. */
+  --heat-1: #d5bb7d;
+  --heat-2: #d99728;
+  --heat-3: #d76f00;
+  --heat-4: #c54d00;
+  --heat-5: #a23c23;
+  --heat-6: #753838;
 
   --series-1: #2a78d6;
   --series-2: #eb6834;
@@ -239,7 +264,7 @@ details#map-options[open] summary h2::after { content: " ▾"; }
 .legend-sizes { display: flex; align-items: flex-end; gap: 12px; margin-top: 10px; }
 .legend-sizes figure { margin: 0; text-align: center; }
 .legend-sizes .dot { display: block; margin: 0 auto 4px; border-radius: 50%;
-  background: var(--rec-3); opacity: .85; }
+  background: var(--heat-4); opacity: .9; }
 .legend-sizes figcaption { font-size: 10px; color: var(--text-muted);
   font-variant-numeric: tabular-nums; }
 
@@ -259,11 +284,14 @@ details#map-options[open] summary h2::after { content: " ▾"; }
 
 .cluster-icon {
   display: grid; place-items: center; border-radius: 50%;
-  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
-  color: #0b0b0b;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 0 16px 2px rgba(110,167,236,.30);
+  font-size: 10.5px; font-weight: 650; font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em; color: #1a1205;
+  border: 1.5px solid rgba(255, 255, 255, .62);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .30), 0 0 18px 3px var(--cl-bloom, transparent);
+  transition: transform .12s ease;
 }
-.cluster-icon.dark-ink { color: #f0efec; }
+.cluster-icon.dark-ink { color: #fff4e2; border-color: rgba(255, 255, 255, .34); }
+.leaflet-marker-icon:hover .cluster-icon { transform: scale(1.08); }
 
 .leaflet-popup-content-wrapper, .leaflet-popup-tip {
   background: var(--surface-1); color: var(--text-primary);
