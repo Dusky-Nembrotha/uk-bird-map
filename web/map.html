@@ -58,12 +58,19 @@
           <label class="field"><span>Marks</span>
             <select id="view-mode">
               <option value="clusters" selected>Grouped discs</option>
+              <optgroup label="Spread across the map">
               <option value="hex">Hex density field</option>
               <option value="relief">Density as relief</option>
               <option value="ridge">The swell (ridgelines)</option>
               <option value="dots">One mark per record</option>
               <option value="cells">The recording network</option>
               <option value="rare">Rarities lit up</option>
+              </optgroup>
+              <optgroup label="Many species on one point">
+                <option value="richness">Species richness</option>
+                <option value="rosette">Site rosettes</option>
+                <option value="covey">Coveys — stacks opened out</option>
+              </optgroup>
             </select>
           </label>
           <label class="field"><span>Colour</span>

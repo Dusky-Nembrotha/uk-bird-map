@@ -167,9 +167,18 @@ function initMap() {
     }
     if (best < 0) return;
     const rec = state.data.recs[best];
-    L.popup({ maxWidth: 280, autoPanPadding: [36, 36], closeButton: true })
+    /* Everything logged at that coordinate, not the one record nearest the
+       pointer. On a site like Landguard that is 400 records and 100 species,
+       and handing back a single Robin would be the same failure the discs
+       have: the depth at the point is the thing worth seeing. */
+    const pid = state.data.pointId[best];
+    const stack = [];
+    for (const i of state.visible) if (state.data.pointId[i] === pid) stack.push(i);
+    L.popup({ maxWidth: 300, autoPanPadding: [36, 36], closeButton: true })
       .setLatLng([rec[LAT], rec[LON]])
-      .setContent(popupHtml(rec))
+      .setContent(stack.length > 1
+        ? clusterPopupHtml(stack.map((i) => ({ _rid: i })))
+        : popupHtml(rec))
       .openOn(map);
   });
   setBasemap(state.basemap);
@@ -458,6 +467,9 @@ function drawTreatment(ctx, W, H) {
     dots: () => trDots(ctx, W, H, pts, state.data, state.speciesClass),
     cells: () => trCells(ctx, W, H, pts, state.data),
     rare: () => trRare(ctx, W, H, pts, state.data, accent),
+    richness: () => trRichness(ctx, W, H, pts, state.data),
+    rosette: () => trRosette(ctx, W, H, pts, state.data, state.speciesClass),
+    covey: () => trCovey(ctx, W, H, pts, state.data, state.speciesClass),
   }[state.view];
   treatmentStats = (fn ? fn() : {}) || {};
   treatmentStats.shown = pts.n;
@@ -796,6 +808,13 @@ function renderSiteDetail() {
 }
 
 const TR_LEGEND_NOTE = {
+  richness: 'Distinct species per cell, not records. One long checklist no'
+          + ' longer lights a cell the way forty separate visits do.',
+  rosette: 'One spoke per species at that exact coordinate, ordered by group,'
+         + ' length by how often it was logged there. The point does not move.',
+  covey: 'Each record scattered inside a disc around its own point, so a stack'
+       + ' reads as a stack. The scatter is invented — positions within a'
+       + ' covey mean nothing, only the covey does.',
   hex: 'Equal-area cells, quantile steps. The count belongs to the ground, not'
      + ' to the zoom level.',
   relief: 'A kernel density surface cut into bands, with an isoline on each'
@@ -832,8 +851,9 @@ function treatmentLegend() {
       + 'Everything else</div>';
   }
   if (note) html += `<div class="legend-row muted small">${note}</div>`;
-  html += '<div class="legend-row muted small">Click the map for the nearest'
-        + ' record.</div>';
+  html += '<div class="legend-row muted small">Click the map for everything'
+        + ' logged at that coordinate — all of it, not the one record nearest'
+        + ' the pointer.</div>';
   return html;
 }
 
@@ -1172,6 +1192,9 @@ async function boot() {
   // Mercator per record and the group each species belongs to: both are fixed
   // for the life of the page, and both are needed before the first paint.
   state.mercator = trMercator(d.recs);
+  // Which records share a coordinate - the thing the spread-out
+  // treatments cannot see, and three of them are entirely about.
+  d.pointId = trPointIds(d.recs).id;
   state.speciesClass = trClassify(d.species);
   d.sources.forEach((_, i) => state.sources.add(i));
   rankSources();

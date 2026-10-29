@@ -131,10 +131,19 @@ grouped discs; the six alternatives come from the design study in
 | **One mark per record** | no aggregation; waders, wildfowl and raptors by hue |
 | **The recording network** | ground nearest each site — the observers, not the birds |
 | **Rarities lit up** | notable records lit, the rest left as grey texture |
+| **Species richness** | distinct species per cell, not records — one long checklist stops lighting a cell |
+| **Site rosettes** | one spoke per species at that exact coordinate, ordered by group |
+| **Coveys** | each record scattered inside a disc around its own point, so a stack reads as a stack |
+
+The last three exist because the first six do not address the shape of this
+data. 72% of records share a coordinate with another record and 7% of the
+points carry 60% of the records — one eBird checklist is forty species at one
+lat/lon, and Landguard Point is 419 records and 106 species on a single pixel.
+Spread that over a hex grid and it is one bright cell.
 
 The treatments draw to one canvas with no hit targets of its own, so clicking
-the map opens the nearest record within about 26px rather than a marker's own
-popup. Colour, glow and grouping belong to the discs and are disabled while a
+the map opens everything logged at that coordinate — the whole stack, via the
+same summary the clusters use — rather than a marker's own popup. Colour, glow and grouping belong to the discs and are disabled while a
 treatment is showing. The choice is kept in the URL (`#view=hex`).
 
 ---

@@ -44,6 +44,9 @@ const TREATMENTS = {
   dots:   { label: 'One mark per record', legend: 'groups' },
   cells:  { label: 'The recording network', legend: 'ramp' },
   rare:   { label: 'Rarities lit up', legend: 'rare' },
+  richness: { label: 'Species richness', legend: 'ramp' },
+  rosette:  { label: 'Site rosettes', legend: 'groups' },
+  covey:    { label: 'Coveys (stacks opened out)', legend: 'groups' },
 };
 
 const trHexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -500,4 +503,182 @@ function trClassify(species) {
     TR_GROUPS.forEach((g, gi) => { if (g.genera.has(genus)) cls[i] = gi; });
   });
   return cls;
+}
+
+/* ============================================ depth at a single coordinate
+
+   The six treatments above all aggregate across space, and across space is
+   not where this dataset is deep: 72% of records share a coordinate with
+   another record, and 7% of the points carry 60% of the records. One eBird
+   checklist is forty species at one lat/lon - Landguard Point is 419 records
+   and 106 species on a single pixel. Spread that over a hex grid and it is
+   one bright cell; the hundred and six species are simply gone.
+
+   These three treat the stack itself as the subject. */
+
+/* Every record's coordinate collapsed to an integer id, once, at load. */
+function trPointIds(recs) {
+  const seen = new Map();
+  const id = new Int32Array(recs.length);
+  for (let i = 0; i < recs.length; i++) {
+    const k = recs[i][TR_LAT] + ',' + recs[i][TR_LON];
+    let v = seen.get(k);
+    if (v === undefined) { v = seen.size; seen.set(k, v); }
+    id[i] = v;
+  }
+  return { id, count: seen.size };
+}
+
+/* The visible records gathered back into the points they were logged at. */
+function trStacks(pts, pointId, recs) {
+  const by = new Map();
+  for (let k = 0; k < pts.n; k++) {
+    const i = pts.i[k], p = pointId[i];
+    let o = by.get(p);
+    if (!o) by.set(p, o = { x: pts.x[k], y: pts.y[k], n: 0, sp: new Map() });
+    o.n++;
+    const s = recs[i][TR_SP];
+    o.sp.set(s, (o.sp.get(s) || 0) + 1);
+  }
+  return by;
+}
+
+/* A stable pseudo-random pair per record: the same record must land in the
+   same place every frame, or the map would seethe as you pan. */
+function trJitter(i) {
+  let x = (i + 0x9e3779b9) | 0;
+  x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+  const a = ((x >>> 0) % 10000) / 10000;
+  x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+  const b = ((x >>> 0) % 10000) / 10000;
+  return [a, b];
+}
+
+/* ---- 7. richness: how many species, not how many records --------------- */
+
+function trRichness(ctx, W, H, pts, data) {
+  const r = 11, sq3 = Math.sqrt(3);
+  const bins = new Map();
+  for (let k = 0; k < pts.n; k++) {
+    const x = pts.x[k], y = pts.y[k];
+    const q = (sq3 / 3 * x - y / 3) / r, rr = (2 / 3 * y) / r;
+    let cx = q, cz = rr, cy = -cx - cz;
+    let [rx, ry, rz] = [Math.round(cx), Math.round(cy), Math.round(cz)];
+    const dx = Math.abs(rx - cx), dy = Math.abs(ry - cy), dz = Math.abs(rz - cz);
+    if (dx > dy && dx > dz) rx = -ry - rz; else if (dy > dz) ry = -rx - rz; else rz = -rx - ry;
+    const key = rx + ',' + rz;
+    let set = bins.get(key);
+    if (!set) bins.set(key, set = new Set());
+    set.add(data.recs[pts.i[k]][TR_SP]);
+  }
+  if (!bins.size) return {};
+  const counts = [...bins.values()].map((s) => s.size);
+  const th = trQuantiles(counts, TR_RAMP.length);
+  let most = 0;
+  for (const [key, set] of bins) {
+    if (set.size > most) most = set.size;
+    const [q, rz] = key.split(',').map(Number);
+    const cx = r * sq3 * (q + rz / 2), cy = r * 1.5 * rz, rad = r - 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 180) * (60 * i - 30);
+      const x = cx + rad * Math.cos(a), y = cy + rad * Math.sin(a);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = TR_RAMP[trBucket(set.size, th)];
+    ctx.globalAlpha = 0.88;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  return { most };
+}
+
+/* ---- 8. rosette: the stack opened out as a glyph ----------------------- */
+
+function trRosette(ctx, W, H, pts, data, cls) {
+  const stacks = trStacks(pts, data.pointId, data.recs);
+  let biggest = 0, deep = 0;
+  // The legend wants the same group counts the dot views report, or it shows
+  // a colour key with nothing beside it.
+  const counts = [0, 0, 0];
+  for (let k = 0; k < pts.n; k++) {
+    const g = cls[data.recs[pts.i[k]][TR_SP]];
+    if (g >= 0) counts[g]++;
+  }
+
+  // Smallest first, so a one-species point never sits on top of a hundred.
+  const list = [...stacks.values()].sort((a, b) => a.sp.size - b.sp.size);
+  for (const st of list) {
+    const rich = st.sp.size;
+    if (rich > biggest) biggest = rich;
+    if (rich >= 10) deep++;
+    const R = Math.min(30, 3.2 + 2.6 * Math.sqrt(rich));
+
+    if (rich === 1) {                   // a lone record stays a dot
+      const [sp] = st.sp.keys();
+      const g = cls[sp];
+      ctx.fillStyle = g >= 0 ? TR_CAT[g] : 'rgba(226, 224, 216, .72)';
+      ctx.beginPath(); ctx.arc(st.x, st.y, 1.9, 0, Math.PI * 2); ctx.fill();
+      continue;
+    }
+
+    /* One spoke per species, ordered by group so the glyph reads as
+       composition rather than as noise; length carries how often that species
+       was logged here. The point itself never moves - this is a glyph on the
+       coordinate, not a scatter around it. */
+    const spokes = [...st.sp.entries()]
+      .map(([sp, n]) => ({ sp, n, g: cls[sp] }))
+      .sort((a, b) => (b.g - a.g) || (b.n - a.n));
+    const maxN = Math.max(...spokes.map((s) => s.n));
+    const shown = spokes.slice(0, 72);
+
+    ctx.beginPath();
+    ctx.arc(st.x, st.y, R * 0.9, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(8, 11, 14, .40)';
+    ctx.fill();
+
+    ctx.lineWidth = Math.max(0.9, Math.min(2.2, 42 / shown.length));
+    shown.forEach((s, i) => {
+      const a = (i / shown.length) * Math.PI * 2 - Math.PI / 2;
+      const len = R * (0.42 + 0.58 * Math.sqrt(s.n / maxN));
+      ctx.strokeStyle = s.g >= 0 ? TR_CAT[s.g] : 'rgba(226, 224, 216, .66)';
+      ctx.beginPath();
+      ctx.moveTo(st.x + Math.cos(a) * R * 0.2, st.y + Math.sin(a) * R * 0.2);
+      ctx.lineTo(st.x + Math.cos(a) * len, st.y + Math.sin(a) * len);
+      ctx.stroke();
+    });
+    ctx.beginPath(); ctx.arc(st.x, st.y, 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 236, 203, .9)'; ctx.fill();
+  }
+  return { counts, other: pts.n - counts[0] - counts[1] - counts[2],
+           points: stacks.size, biggest, deep };
+}
+
+/* ---- 9. covey: the stack scattered so you can see it is a stack -------- */
+
+function trCovey(ctx, W, H, pts, data, cls) {
+  const stacks = trStacks(pts, data.pointId, data.recs);
+  const radius = new Map();
+  for (const [p, st] of stacks) {
+    radius.set(p, st.n === 1 ? 0 : Math.min(26, 2.4 * Math.sqrt(st.n)));
+  }
+  let scattered = 0;
+  const counts = [0, 0, 0];
+  for (let k = 0; k < pts.n; k++) {
+    const i = pts.i[k];
+    const R = radius.get(data.pointId[i]) || 0;
+    let x = pts.x[k], y = pts.y[k];
+    if (R > 0) {
+      scattered++;
+      const [a, b] = trJitter(i);
+      const ang = a * Math.PI * 2, rr = Math.sqrt(b) * R;
+      x += Math.cos(ang) * rr; y += Math.sin(ang) * rr;
+    }
+    const g = cls[data.recs[i][TR_SP]];
+    if (g >= 0) counts[g]++;
+    ctx.fillStyle = g >= 0 ? TR_CAT[g] : 'rgba(226, 224, 216, .50)';
+    ctx.beginPath(); ctx.arc(x, y, g >= 0 ? 1.9 : 1.4, 0, Math.PI * 2); ctx.fill();
+  }
+  return { counts, other: pts.n - counts[0] - counts[1] - counts[2], scattered };
 }
