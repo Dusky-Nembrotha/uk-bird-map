@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en-GB" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>UK Bird Map</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="studio.css">
+</head>
+<body class="studio">
+
+<div id="app" class="viz-root">
+
+  <!-- Slots that the alternative layouts move the real controls into. Moved,
+       never copied: an id can only exist once and a moved node keeps its
+       listeners. Empty and hidden in the sidebar layout. -->
+  <div id="toolbar" hidden></div>
+
+  <div id="panel-grip" role="separator" aria-orientation="horizontal"
+       tabindex="0" aria-label="Resize the settings panel"
+       title="Drag to resize — double-tap to hide">
+    <span class="grip-bar" aria-hidden="true"></span>
+    <button id="panel-toggle" class="icon-btn" type="button"
+            aria-controls="panel" aria-expanded="true"
+            title="Hide the settings" aria-label="Hide the settings"></button>
+  </div>
+
+  <aside id="panel" aria-label="Animation settings">
+    <div class="panel-bar">
+      <span class="head-actions">
+        <!-- The gear is gone: every setting now lives in this panel. The way
+             to put the panel away sits where the Map link used to, and the
+             link moves along beside it. -->
+        <button id="drawer-close" class="icon-btn wide" type="button"
+                title="Hide the settings" aria-label="Hide the settings"
+                aria-controls="panel" aria-expanded="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+          <span>Hide</span>
+        </button>
+        <a class="icon-btn wide" href="map.html" title="Tile map"
+           aria-label="Tile map">Map</a>
+      </span>
+    </div>
+    <!-- Back out of a section to the menu. Shown only while a section is
+         open; the menu itself is built from the sections at boot. -->
+    <div id="sheet-head" hidden>
+      <button id="sheet-back" class="icon-btn wide" type="button"
+              aria-label="Back to all settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+        <span>All settings</span>
+      </button>
+      <h2 id="sheet-title"></h2>
+    </div>
+
+    <section class="panel">
+      <details class="sect" id="sect-the-subject" open>
+        <summary><h2>The subject</h2></summary>
+      <label class="field groupfield"><span>Group</span>
+        <select id="o-group"><option value="">All birds</option></select>
+      </label>
+      <div class="field"><span>Species</span>
+        <div class="combo">
+          <input id="o-species-input" type="text" role="combobox"
+                 aria-expanded="false" aria-controls="o-species-list"
+                 aria-autocomplete="list" autocomplete="off"
+                 placeholder="All species — type to search">
+          <button id="o-species-clear" class="combo-clear" type="button"
+                  hidden title="Clear the group and species"
+                  aria-label="Clear the group and species">✕</button>
+          <ul id="o-species-list" class="combo-list" role="listbox" hidden></ul>
+        </div>
+      </div>
+      <div id="o-species-chips" class="sp-chips" hidden></div>
+      <input type="hidden" id="o-species" value="">
+      <div class="field daterange"><span>Dates</span>
+        <span class="range-pair">
+          <input id="o-from" type="date" aria-label="From">
+          <i>to</i>
+          <input id="o-to" type="date" aria-label="To">
+        </span>
+      </div>
+      <div id="subject-summary" class="note"></div>
+      
+      <div id="in-view">
+        <details id="fold-in-view" open>
+          <summary><h3><span id="in-view-heading">Most reported</span> <span id="in-view-scope" class="scope">in view</span></h3></summary>
+          <ul id="in-view-list" class="toplist"></ul>
+        </details>
+      </div>
+      <div id="suggestions">
+        <details id="fold-suggestions">
+          <summary><h3>Which birds are moving?</h3></summary>
+          <ul id="suggestion-list" class="suggestions"></ul>
+        </details>
+      </div>
+      
+      </details>
+    </section>
+
+    <section class="panel">
+      <details class="sect" id="sect-the-clip">
+        <summary><h2>The clip</h2></summary>
+      <label class="field"><span>Length</span>
+        <span class="num-unit"><input id="o-duration" type="number" min="3" max="180" step="1" value="30"><i>sec</i></span>
+      </label>
+      
+      <div id="frame-estimate" class="note"></div>
+    
+      </details>
+    </section>
+
+    <section class="panel">
+      <details class="sect" id="sect-the-world" open>
+        <summary><h2>The world</h2></summary>
+      
+      <p class="note">Scroll to zoom, drag to pan.
+        <button id="o-area-reset" class="text-btn" type="button">Reset view</button></p>
+      
+      <label class="field"><span>Backdrop</span>
+        <select id="o-basemap">
+          <option value="space">Drawn — from orbit</option>
+          <option value="ink">Drawn — ink</option>
+          <option value="teal">Drawn — deep teal</option>
+          <option value="slate">Drawn — slate</option>
+          <option value="tile-dark">Map — dark</option>
+          <option value="tile-light">Map — light</option>
+          <option value="tile-satellite" selected>Satellite</option>
+          <option value="tile-terrain">Terrain</option>
+          <option value="tile-ocean">Ocean floor</option>
+        </select>
+      </label>
+      <h3>Weather &amp; light</h3>
+      <label class="field"><span>Hours shown</span>
+        <select id="o-hours">
+          <option value="all" selected>Every hour</option>
+          <option value="day">Daylight only — no night pulse</option>
+          <option value="night">Night only — nocmig</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="o-night" checked>
+        <span>Day &amp; night — real sun position</span></label>
+      <label class="field sub" data-for="o-night"><span>Night depth</span>
+        <input id="o-night-depth" type="range" min="0" max="1" step="0.05" value="0.45"></label>
+      <label class="check"><input type="checkbox" id="o-wind" checked>
+        <span>Wind flow</span></label>
+      <label class="field sub" data-for="o-wind"><span>Wind opacity</span>
+        <input id="o-wind-alpha" type="range" min="0.05" max="1" step="0.05" value="0.55"></label>
+      <label class="check"><input type="checkbox" id="o-clouds">
+        <span>Cloud cover</span></label>
+      <label class="field sub" data-for="o-clouds"><span>Cloud strength</span>
+        <input id="o-cloud-alpha" type="range" min="0" max="1" step="0.05" value="0.4"></label>
+      <label class="check"><input type="checkbox" id="o-rain">
+        <span>Rain</span></label>
+      <label class="field sub" data-for="o-rain"><span>Rain strength</span>
+        <input id="o-rain-alpha" type="range" min="0.1" max="1" step="0.05" value="0.5"></label>
+      <label class="check"><input type="checkbox" id="o-lights">
+        <span>City lights come on at dusk</span></label>
+      <label class="field sub" data-for="o-lights"><span>City glow</span>
+        <input id="o-light-glow" type="range" min="0" max="2" step="0.1" value="1"></label>
+        
+      
+      
+      
+      
+      
+      <details>
+        <summary><h3>Fine tuning</h3></summary>
+        <label class="field"><span>Wind streams</span>
+          <input id="o-wind-count" type="range" min="0" max="14000" step="200" value="2800"></label>
+        <label class="field"><span>Wind speed</span>
+          <input id="o-wind-speed" type="range" min="0.1" max="6" step="0.1" value="0.9"></label>
+        <label class="field"><span>Wind trails</span>
+          <input id="o-wind-fade" type="range" min="0.005" max="0.4" step="0.005" value="0.025"></label>
+        <label class="field"><span>Wind weight</span>
+          <input id="o-wind-weight" type="range" min="0.3" max="5" step="0.1" value="1.2"></label>
+        
+        
+        <label class="check"><input type="checkbox" id="o-stars" checked>
+        <span>Starfield over the dark side</span></label>
+        
+
+      </details>
+    
+      
+
+      
+      </details>
+    </section>
+
+    <section class="panel">
+      <details class="sect" id="sect-captions">
+        <summary><h2>Captions</h2></summary>
+      <label class="field"><span>Clip overlay</span>
+        <select id="o-hud-layout">
+          <option value="split" selected>Split corners</option>
+          <option value="column">One column</option>
+        </select>
+      </label>
+      <label class="field"><span>Title</span>
+        <input id="o-title" type="text" placeholder="auto"></label>
+      <label class="field"><span>Subtitle</span>
+        <input id="o-subtitle" type="text" placeholder="auto"></label>
+      <label class="check"><input type="checkbox" id="o-show-clock" checked>
+        <span>Show the date and time</span></label>
+      <label class="check"><input type="checkbox" id="o-show-counter" checked>
+        <span>Show a running count</span></label>
+      <label class="check"><input type="checkbox" id="o-show-progress" checked>
+        <span>Show a progress line</span></label>
+      <label class="check"><input type="checkbox" id="o-show-credit" checked>
+        <span>Show the data credit</span></label>
+    
+      </details>
+    </section>
+    <section class="panel">
+      <details class="sect" id="sect-the-birds">
+        <summary><h2>The birds</h2></summary>
+      <label class="field"><span>Colour</span>
+        <select id="o-bird-colour">
+          <option value="warm" selected>Warm glow</option>
+          <option value="species">By species</option>
+          <option value="source">By source</option>
+          <option value="white">White</option>
+        </select>
+      </label>
+      <label class="field"><span>Linger</span>
+        <span class="num-unit"><input id="o-trail" type="number" min="0.5" max="72" step="0.5" value="9"><i>hrs</i></span>
+      </label>
+      <label class="field"><span>Mark style</span>
+        <select id="o-mark-style">
+          <option value="glow" selected>Glow — core and bloom</option>
+          <option value="soft">Soft — haze, no centre</option>
+          <option value="spark">Spark — glinting point</option>
+          <option value="ring">Ring — opens as it fades</option>
+          <option value="outline">Outline — crisp, no glow</option>
+          <option value="diamond">Diamond — cartographic</option>
+          <option value="streak">Streak — trails on the wind</option>
+          <option value="flock">Flock — a scatter of specks</option>
+          <option value="spire">Spire — stands off the map</option>
+          <option value="glyph">Glyph — little birds</option>
+        </select>
+      </label>
+      <label class="field"><span>Dot size</span>
+        <input id="o-dot-size" type="range" min="0.3" max="3" step="0.1" value="0.7"></label>
+      <label class="field"><span>Glow</span>
+        <input id="o-dot-glow" type="range" min="0" max="2" step="0.1" value="2"></label>
+      <label class="check"><input type="checkbox" id="o-size-by-count" checked>
+        <span>Bigger dot for bigger flocks</span></label>
+      <label class="check"><input type="checkbox" id="o-ripple" checked>
+        <span>Ripple as each record appears</span></label>
+      <label class="check"><input type="checkbox" id="o-heat" checked>
+        <span>Leave a lasting trace</span></label>
+      <label class="field"><span>Records without a time</span>
+        <select id="o-untimed">
+          <option value="spread" selected>Spread across daylight</option>
+          <option value="dawn">All at dawn</option>
+          <option value="noon">All at midday</option>
+          <option value="skip">Leave them out</option>
+        </select>
+      </label>
+    
+      </details>
+    </section>
+    <section class="panel">
+      <details class="sect" id="sect-output">
+        <summary><h2>Output</h2></summary>
+        <label class="field"><span>Frame rate</span>
+        <select id="o-fps">
+          <option value="24">24 fps — filmic</option>
+          <option value="30" selected>30 fps — standard</option>
+          <option value="60">60 fps — silky</option>
+        </select>
+      </label>
+      <label class="field"><span>File</span>
+        <select id="o-format">
+          <option value="mp4" selected>MP4 — H.264</option>
+          <option value="webm">WebM — VP9</option>
+          <option value="gif">GIF — short clips only</option>
+        </select>
+      </label>
+      
+      
+      
+      </details>
+    </section>
+    <section class="panel">
+      <details class="sect" id="sect-export">
+        <summary><h2>Export</h2></summary>
+        <button id="btn-render" class="primary" type="button">Render a clip…</button>
+      </details>
+    </section>
+    <section class="panel">
+      <details class="sect" id="sect-where-the-data-comes-from">
+        <summary><h2>Where the data comes from</h2></summary>
+        <ul id="o-sources" class="checklist"></ul>
+      
+    
+      </details>
+    </section>
+    <section class="panel">
+      <details class="sect" id="sect-app-layout">
+        <summary><h2>App layout</h2></summary>
+      <label class="field"><span>Arrangement</span>
+        <select id="o-layout">
+          <option value="theatre" selected>Theatre — full-bleed map, drawer</option>
+          <option value="sidebar">Sidebar — panel beside the map</option>
+          <option value="dashboard">Dashboard — toolbar, map, cards</option>
+          <option value="search">Search — map and one box</option>
+        </select>
+      </label>
+      <p class="note">Try each on a phone and a desktop; the choice is kept in
+        the link.</p>
+      </details>
+    </section>
+    <section class="panel foot">
+      <p class="muted small" id="capabilities"></p>
+    </section>
+  </aside>
+
+  <main id="stage">
+    <div id="search-pill" hidden></div>
+    <button id="drawer-toggle" class="icon-btn floating-stage" type="button"
+            hidden title="Open the panel" aria-label="Open the panel"
+            aria-controls="panel" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <div id="stage-inner">
+      <!-- The canvas is wrapped so the folded-away controls can be anchored to
+           its bottom edge, whatever size the map happens to be. -->
+      <div id="map-wrap">
+        <canvas id="view"></canvas>
+        <!-- Holds the real Group and Dates controls while the panel is folded
+             away - the nodes are moved here, not copied, so there is nothing
+             to keep in step. -->
+        <div id="mini-bar" hidden></div>
+      </div>
+      <div id="scrub-wrap">
+        <!-- Transport lives with the timeline it drives, not in a far corner
+             of the map. Full screen is gone: the map is already full-bleed. -->
+        <button id="btn-play" class="icon-btn" type="button"
+                title="Play or pause" aria-label="Play or pause"></button>
+        <input id="scrub" type="range" min="0" max="1000" value="0" step="1"
+               aria-label="Scrub through the clip">
+        <span id="scrub-label" class="muted small">—</span>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+
+<div id="export-dialog" class="viz-root" hidden>
+  <div class="export-card">
+    <div class="settings-head">
+      <h2>Render a clip</h2>
+      <button id="export-close" class="icon-btn" type="button"
+              aria-label="Close">✕</button>
+    </div>
+    <div class="export-body">
+      <label class="field"><span>Aspect</span>
+        <select id="o-size">
+          <option value="1080x1080" selected>1:1 — 1080 × 1080</option>
+          <option value="720x720">1:1 — 720 × 720</option>
+          <option value="1080x1350">4:5 — 1080 × 1350</option>
+          <option value="1080x1920">9:16 — 1080 × 1920</option>
+          <option value="1920x1080">16:9 — 1920 × 1080</option>
+          <option value="1280x720">16:9 — 1280 × 720</option>
+          <option value="1620x1080">3:2 — 1620 × 1080</option>
+          <option value="1440x1080">4:3 — 1440 × 1080</option>
+        </select>
+      </label>
+      <div id="export-estimate" class="note"></div>
+    </div>
+    <div class="export-actions">
+      <button id="export-start" class="primary" type="button">Start render</button>
+    </div>
+  </div>
+</div>
+
+<div id="render-overlay" class="viz-root" hidden>
+  <div class="render-card">
+    <div class="render-head">
+      <h2 id="render-title">Rendering</h2>
+      <button id="render-min" class="icon-btn" type="button"
+              title="Minimise" aria-label="Minimise">–</button>
+    </div>
+    <p class="muted small" id="render-sub">Drawing frames…</p>
+    <div class="bar"><div id="render-bar"></div></div>
+    <p class="render-stat"><span id="render-pct">0%</span>
+      <span class="muted small" id="render-eta"></span></p>
+    <p class="muted small" id="render-frames">preparing…</p>
+    <canvas id="render-thumb" width="180" height="180"></canvas>
+    <div class="render-actions">
+      <a id="render-download" class="primary" hidden download>Download</a>
+      <button id="render-cancel" class="ghost" type="button">Cancel</button>
+    </div>
+    <p class="muted small" id="render-error"></p>
+  </div>
+</div>
+
+<div id="boot" class="overlay viz-root">
+  <div class="spinner" aria-hidden="true"></div>
+  <p>Loading the world…</p>
+</div>
+
+<script src="combobox.js"></script>
+<script src="studio.js"></script>
+</body>
+</html>
