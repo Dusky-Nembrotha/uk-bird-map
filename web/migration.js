@@ -18,7 +18,7 @@ const state = {
   playing: true,
   weeks: 0,
   w: 0, h: 0, dpr: 1,
-  basemap: 'satellite',
+  basemap: 'light',
 };
 
 /* The view. Britain, Iceland and the Norwegian Sea - the triangle this
@@ -108,7 +108,7 @@ function wireZoom(canvas) {
     const [x, y] = toCanvas(e);
     zoomAt(x, y, Math.exp(-e.deltaY * 0.0015));
     updateZoomUi();
-    queueTiles();
+    queueTiles(); queueLand();
   }, { passive: false });
 
   /* Pointer events cover mouse and touch together, so one finger pans and two
@@ -166,7 +166,7 @@ function wireZoom(canvas) {
     if (live.size === 0) {
       drag = null;
       canvas.style.cursor = view.k > 1 ? 'grab' : 'default';
-      queueTiles();
+      queueTiles(); queueLand();
     }
   };
   canvas.addEventListener('pointerup', end);
@@ -175,7 +175,7 @@ function wireZoom(canvas) {
     const [x, y] = toCanvas(e);
     zoomAt(x, y, e.shiftKey ? 1 / 1.8 : 1.8);
     updateZoomUi();
-    queueTiles();
+    queueTiles(); queueLand();
   });
 }
 
@@ -199,13 +199,32 @@ const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
 const BASEMAPS = {
   satellite: { url: `${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
                credit: 'Esri, Maxar, Earthstar Geographics', max: 17, dim: 0.42 },
+  light: { url: `${ESRI}/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
+           credit: 'Esri, HERE, Garmin, OpenStreetMap', max: 16, dim: 1, pale: true },
   dark: { url: `${ESRI}/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
           credit: 'Esri, HERE, Garmin, OpenStreetMap', max: 16, dim: 0.9 },
   none: null,
 };
 
+// A pale backdrop needs the opposite treatment to a dark one: a white wash
+// rather than a black one, and a coastline dark enough to read on it.
+const pale = () => !!(BASEMAPS[state.basemap] || {}).pale;
+
 const tiles = { canvas: null, view: null, credit: '', dim: 1, token: 0 };
 let tileTimer = null;
+
+/* The backdrop - tiles, wash and coastline - only changes when the view does,
+   but it was rebuilt on every frame: the coastline alone is thousands of
+   points traced three times, sixty times a second. It is now composed once
+   into an offscreen canvas and blitted, exactly as the tiles already were,
+   and rebuilt once the gesture settles. */
+const land = { canvas: null, view: null, key: '' };
+let landTimer = null;
+
+function queueLand() {
+  clearTimeout(landTimer);
+  landTimer = setTimeout(() => { land.view = null; }, 160);
+}
 
 function queueTiles() {
   clearTimeout(tileTimer);
@@ -296,6 +315,35 @@ function sample(which, lat, lon, t) {
 /* --------------------------------------------------------------- drawing */
 
 function drawLand(ctx) {
+  const key = `${state.w}x${state.h}|${state.basemap}|${tiles.token}`;
+  if (!land.canvas || land.key !== key || !land.view) buildLand(key);
+
+  // Between rebuilds, shift and scale what we have so the ground moves with
+  // the gesture instead of sticking and then jumping.
+  const lv = land.view;
+  ctx.save();
+  if (lv && (lv.k !== view.k || lv.tx !== view.tx || lv.ty !== view.ty)) {
+    const f = view.k / lv.k;
+    ctx.translate(view.tx - lv.tx * f, view.ty - lv.ty * f);
+    ctx.scale(f, f);
+  }
+  ctx.drawImage(land.canvas, 0, 0, state.w, state.h);
+  ctx.restore();
+}
+
+function buildLand(key) {
+  if (!land.canvas || land.canvas.width !== state.w || land.canvas.height !== state.h) {
+    land.canvas = document.createElement('canvas');
+    land.canvas.width = state.w; land.canvas.height = state.h;
+  }
+  const c = land.canvas.getContext('2d');
+  c.clearRect(0, 0, state.w, state.h);
+  paintLand(c);
+  land.view = { k: view.k, tx: view.tx, ty: view.ty };
+  land.key = key;
+}
+
+function paintLand(ctx) {
   const near = (r) => r.some(([lon, lat]) =>
     lon > VIEW.west - 6 && lon < VIEW.east + 6
     && lat > VIEW.south - 6 && lat < VIEW.north + 6);
@@ -308,7 +356,7 @@ function drawLand(ctx) {
     ctx.closePath();
   };
 
-  ctx.fillStyle = '#05070c';
+  ctx.fillStyle = pale() ? '#e9eef2' : '#05070c';
   ctx.fillRect(0, 0, state.w, state.h);
 
   if (tiles.canvas) {
@@ -327,20 +375,21 @@ function drawLand(ctx) {
     // Dimming the tiles alone leaves a pale sea with plenty of contrast of
     // its own; the wash pushes the whole ground back so the birds are the
     // brightest thing on the frame, which is the entire point of it.
-    ctx.fillStyle = 'rgba(5, 8, 14, .34)';
+    ctx.fillStyle = pale() ? 'rgba(255, 255, 255, .30)' : 'rgba(5, 8, 14, .34)';
     ctx.fillRect(0, 0, state.w, state.h);
   } else {
     // Until the imagery lands - or with it turned off - the drawn world.
-    ctx.fillStyle = '#1b2026';
+    ctx.fillStyle = pale() ? '#dfe6ea' : '#1b2026';
     for (const r of state.geo.land) if (near(r)) { ring(r); ctx.fill(); }
-    ctx.fillStyle = '#0a0d11';
+    ctx.fillStyle = pale() ? '#c9d6de' : '#0a0d11';
     for (const r of state.geo.lakes) if (near(r)) { ring(r); ctx.fill(); }
   }
 
   /* A coastline over the top either way. On imagery it is what keeps the
      country readable once the land has been dimmed far enough for white
      marks to carry. */
-  ctx.strokeStyle = tiles.canvas ? 'rgba(170, 200, 230, .30)'
+  ctx.strokeStyle = pale() ? 'rgba(60, 85, 105, .45)'
+                  : tiles.canvas ? 'rgba(170, 200, 230, .30)'
                                  : 'rgba(190, 205, 220, .20)';
   ctx.lineWidth = 0.8; ctx.lineJoin = 'round';
   for (const r of state.geo.land) if (near(r)) { ring(r); ctx.stroke(); }
@@ -361,11 +410,13 @@ function drawReports(ctx, t) {
       const x = px(arr[k + 1]), y = py(arr[k]);
       if (x < -20 || y < -20 || x > state.w + 20 || y > state.h + 20) continue;
       const g = ctx.createRadialGradient(x, y, 0, x, y, 9);
-      g.addColorStop(0, `rgba(235, 244, 255, ${0.30 * alpha})`);
-      g.addColorStop(1, 'rgba(235, 244, 255, 0)');
+      const halo = pale() ? '20, 60, 110' : '235, 244, 255';
+      g.addColorStop(0, `rgba(${halo}, ${(pale() ? 0.22 : 0.30) * alpha})`);
+      g.addColorStop(1, `rgba(${halo}, 0)`);
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = `rgba(245, 250, 255, ${0.85 * alpha})`;
+      ctx.fillStyle = pale() ? `rgba(12, 48, 92, ${0.88 * alpha})`
+                             : `rgba(245, 250, 255, ${0.85 * alpha})`;
       ctx.beginPath(); ctx.arc(x, y, 1.15, 0, Math.PI * 2); ctx.fill();
     }
   };
@@ -444,7 +495,9 @@ function drawJourneys(ctx, now) {
           const t2 = phase - ((seg + 1) / 5) * comet;
           if (t2 < 0) break;
           const p1 = seg === 0 ? head : at(q, t1), p2 = at(q, t2);
-          ctx.strokeStyle = `rgba(226, 240, 255, ${alpha * (1 - seg / 5)})`;
+          ctx.strokeStyle = pale()
+            ? `rgba(20, 70, 125, ${alpha * (1 - seg / 5)})`
+            : `rgba(226, 240, 255, ${alpha * (1 - seg / 5)})`;
           ctx.lineWidth = 1.6 - seg * 0.22;
           ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
         }
@@ -494,16 +547,16 @@ function drawHotspots(ctx) {
     // A ring marks the place whether or not its name would fit.
     ctx.beginPath();
     ctx.arc(x, y, 3.1 * S, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,.78)';
+    ctx.strokeStyle = pale() ? 'rgba(20, 60, 110, .72)' : 'rgba(255,255,255,.78)';
     ctx.lineWidth = 1.3 * S;
     ctx.stroke();
     if (!put) continue;
     placed.push(put);
 
     ctx.textAlign = 'left';
-    ctx.shadowColor = 'rgba(0,0,0,.85)';
+    ctx.shadowColor = pale() ? 'rgba(255,255,255,.9)' : 'rgba(0,0,0,.85)';
     ctx.shadowBlur = 5 * S;
-    ctx.fillStyle = 'rgba(255,255,255,.90)';
+    ctx.fillStyle = pale() ? 'rgba(18, 38, 60, .95)' : 'rgba(255,255,255,.90)';
     ctx.fillText(sp.name, put.x0, put.y);
     ctx.shadowBlur = 0;
   }
@@ -581,7 +634,7 @@ function drawHud(ctx, t) {
   /* The bar is a fixed number of real pixels tall, so the footer has to be
      too - scaling it with the frame tucked it under the controls on a phone. */
   const foot = Math.max(118, 150 * S);
-  ctx.fillText('Bright: birds reported', pad, state.h - foot);
+  ctx.fillText((pale() ? 'Dark: birds reported' : 'Bright: birds reported'), pad, state.h - foot);
   ctx.fillStyle = 'rgba(255,255,255,.62)';
   ctx.font = `500 ${Math.round(16 * S)}px system-ui, sans-serif`;
   ctx.fillText('Lines: modelled movement, not tracked birds', pad, state.h - foot + 26 * S);
@@ -642,7 +695,7 @@ function resize() {
   state.ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
   setProjection(w, h);
   clampPan();
-  queueTiles();
+  queueTiles(); queueLand();
 }
 
 async function loadSpecies(slug) {
