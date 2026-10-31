@@ -45,12 +45,12 @@ class _Paced:
 
 _paced = _Paced()
 
-# GBIF's latency wanders between half a second and six seconds a page for no
-# reason visible from here, and a year of a common species is hundreds of
-# pages. Months are fetched a few at a time so a slow spell costs wall clock
-# instead of the whole run. The shared limiter still paces every request, so
-# this overlaps waiting rather than raising the rate.
-WORKERS = 6
+# One at a time. Fetching months concurrently looked like the obvious fix for
+# a slow spell and was the opposite: the serial run pulled 70,000 records in
+# seventy seconds, while six workers stalled for an hour and three quarters
+# having written one month. GBIF evidently does not want several connections
+# from one client, and says so by going quiet rather than by refusing.
+WORKERS = 1
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS occurrence (

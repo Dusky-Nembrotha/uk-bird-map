@@ -4,6 +4,14 @@
 #   ./run.sh               fetch, then serve on http://localhost:8777
 #   ./run.sh --serve-only  skip fetching
 #   ./run.sh --deep        slower eBird sweep, many more records
+#
+# The migration view is fed separately and on its own cadence - it reads years
+# rather than the rolling month this pipeline keeps, so it is not rebuilt on
+# every fetch:
+#
+#   python3 -m src.backfill  --species "Anser brachyrhynchus" \
+#                            --from 2024-09-01 --to 2025-08-31
+#   python3 -m src.migration --from 2024-09-01 --to 2025-08-31
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -34,8 +42,14 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
 fi
 
 echo
-echo "  Map     http://localhost:${PORT}/"
-echo "  Studio  http://localhost:${PORT}/studio.html"
+echo "  Animation  http://localhost:${PORT}/"
+echo "  Tile map   http://localhost:${PORT}/map.html"
+if [ -d web/data/migration ] && [ -n "$(ls -A web/data/migration 2>/dev/null)" ]; then
+  echo "  A year     http://localhost:${PORT}/migration.html"
+else
+  echo "  A year     http://localhost:${PORT}/migration.html  (no data yet - see the"
+  echo "             backfill commands at the top of this script)"
+fi
 echo
 echo "Press Ctrl-C to stop."
 exec python3 -m src.server --port "$PORT"

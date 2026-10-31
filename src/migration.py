@@ -285,13 +285,22 @@ _ORG_SUFFIX = re.compile(
 # eBird location ids leak into GBIF's locality field as bare codes. They are
 # names of nothing.
 _LOC_CODE = re.compile(r"^L\d+$")
+# So do administrative units. A county is not a hotspot, and "SL
+# Schleswig-Flensburg" is a label for a form, not for a map.
+_ADMIN = re.compile(
+    r"\((Landkreis|Kreis|kommune|municipality|province|County)\)"
+    r"|Regierungsbezirk|^[A-Z]{2}\s+[A-Z]"
+    r"|^(Region|Province|Departement|D\u00e9partement|Comunidad)\b", re.I)
+# Greek and Cyrillic region names come through too. They are real places, but
+# an English caption cannot carry them and they are regions, not sites.
+_NON_LATIN = re.compile(r"[\u0370-\u03ff\u0400-\u04ff]")
 
 
 def _clean_locality(name):
     if not name:
         return None
     n = name.strip()
-    if _LOC_CODE.match(n):
+    if _LOC_CODE.match(n) or _ADMIN.search(n) or _NON_LATIN.search(n):
         return None
     # eBird writes sub-sites after a dash; the parent is the place. Observers
     # use both "Helgoland--Dune" and "Helgoland - Dune", and leaving the
