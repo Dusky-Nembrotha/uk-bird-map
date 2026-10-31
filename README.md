@@ -310,6 +310,54 @@ opens frozen on one frame is not what someone following it wants to see.
 
 ---
 
+## One year of migration
+
+A second animation, at `/migration.html`, built the way GeoPanda's Canada Goose
+clip is: eBird reports aggregated week by week, with movement inferred between
+the weeks. Two layers, kept apart on purpose — **bright dots are reports
+somebody filed**, **lines are modelled movement**. No bird is tracked.
+
+```bash
+python3 -m src.backfill  --species "Anser brachyrhynchus" --months 30
+python3 -m src.migration --species "Anser brachyrhynchus" \
+                         --from 2024-09-01 --to 2025-08-31
+```
+
+The backfill writes to `data/migration.db`, not the main database, because the
+live pipeline prunes anything older than a month — right for "what is about
+this week", fatal for a migration. It also *keeps* the records GBIF flags as
+eBird, which the live fetcher drops: over a year, the eBird Observation
+Dataset on GBIF is the historical record, and our live eBird adapter has only
+ever seen the last fortnight.
+
+`src/migration.py` bins the records by week onto a coarse grid, smooths each
+week into an abundance surface, and recovers movement between consecutive
+weeks by coarse-to-fine Horn–Schunck optical flow. Output is
+`web/data/migration.json` in the same shape as the weather grid — a lat/lon
+field of `u`/`v` in degrees per day, plus weekly abundance and the observed
+report positions.
+
+**Choose the window deliberately.** GBIF republishes eBird in batches, so the
+last several months of any download are a fraction of what they will hold:
+October 2026 arrived with 1,242 Pink-footed Goose records against 6,948 for
+October 2025. A year running up to today ends in a fade that is an artefact of
+publishing, not of birds.
+
+### What it is and is not
+
+The flow is the direction the *centre of the population* must have shifted for
+one week's distribution to become the next. That is a real quantity about a
+species and emphatically not a flight path. Abundance is reports, not birds,
+so it carries observer effort with it — Britain looks busier than Iceland
+partly because more people are looking.
+
+It validates against what the species actually does. Weighted by where the
+birds are, flow runs south in autumn (−0.09°/day, October −0.22), north in
+spring (+0.29, May +0.41) and is still in summer; the population centroid sits
+at 54.4°N in Britain in December and 61.7°N in Iceland in June.
+
+---
+
 ## Commands
 
 ```bash
