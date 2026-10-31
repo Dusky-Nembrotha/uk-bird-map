@@ -50,7 +50,7 @@ _paced = _Paced()
 # pages. Months are fetched a few at a time so a slow spell costs wall clock
 # instead of the whole run. The shared limiter still paces every request, so
 # this overlaps waiting rather than raising the rate.
-WORKERS = 4
+WORKERS = 6
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS occurrence (

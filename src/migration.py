@@ -293,8 +293,10 @@ def _clean_locality(name):
     n = name.strip()
     if _LOC_CODE.match(n):
         return None
-    # eBird writes sub-sites after a double dash; the parent is the place.
-    n = n.split("--")[0].strip()
+    # eBird writes sub-sites after a dash; the parent is the place. Observers
+    # use both "Helgoland--Dune" and "Helgoland - Dune", and leaving the
+    # second form alone gave labels like "Helgoland - Dune -".
+    n = re.split(r"\s*--|\s+-\s+", n)[0].strip()
     n = re.sub(r"^(WWT|RSPB|NNR|SSSI)\s+", "", n)
     n = n.split(",")[0].strip()
     # "Druridge Pools NWT NR and Druridge Links" is a gazetteer entry, not a
@@ -302,7 +304,7 @@ def _clean_locality(name):
     n = re.split(r"\s+(?:and|&)\s+", n)[0].strip()
     n = _ORG_SUFFIX.sub("", n).strip()
     n = re.sub(r"\s+(RSPB|WWT|NWT|LWT|SWT|NNR|LNR|SSSI|NR)\b", "", n).strip()
-    n = n.rstrip(" -–—")
+    n = n.strip(" -–—")
     # Longer than this and it stops being a label and starts being a sentence.
     if len(n) > 26:
         words = n.split()

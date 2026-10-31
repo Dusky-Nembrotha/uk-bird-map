@@ -41,9 +41,14 @@ const daysPerFrame = () => (state.weeks * 7) / (YEAR_SECONDS * 60);
 const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
 let MY0, MY1, px, py, lonAt, latAt;
 
+/* The map is vector all the way down - coastlines, reports, journeys and
+   labels are all drawn from coordinates every frame - so zooming is a change
+   of projection rather than a magnified bitmap. Nothing gets softer as you go
+   in, and the labels and the title stay the size they were. */
+const view = { k: 1, tx: 0, ty: 0 };
+
 function setProjection(w, h) {
   MY0 = merc(VIEW.south); MY1 = merc(VIEW.north);
-  // Fit the bbox while keeping Mercator square, so nothing is stretched.
   const sx = w / (VIEW.east - VIEW.west);
   const sy = h / (MY1 - MY0) * (Math.PI / 180);
   /* Contain, not cover. Covering filled the frame handsomely and cut Iceland
@@ -55,13 +60,85 @@ function setProjection(w, h) {
   const cw = s * (VIEW.east - VIEW.west);
   const ch = s * (MY1 - MY0) / (Math.PI / 180);
   const ox = (w - cw) / 2, oy = (h - ch) / 2;
-  px = (lon) => ox + ((lon - VIEW.west) / (VIEW.east - VIEW.west)) * cw;
-  py = (lat) => oy + ch - ((merc(lat) - MY0) / (MY1 - MY0)) * ch;
-  lonAt = (x) => VIEW.west + ((x - ox) / cw) * (VIEW.east - VIEW.west);
+
+  const bx = (lon) => ox + ((lon - VIEW.west) / (VIEW.east - VIEW.west)) * cw;
+  const by = (lat) => oy + ch - ((merc(lat) - MY0) / (MY1 - MY0)) * ch;
+
+  px = (lon) => bx(lon) * view.k + view.tx;
+  py = (lat) => by(lat) * view.k + view.ty;
+  lonAt = (x) => VIEW.west
+    + ((((x - view.tx) / view.k) - ox) / cw) * (VIEW.east - VIEW.west);
   latAt = (y) => {
-    const m = MY0 + ((oy + ch - y) / ch) * (MY1 - MY0);
+    const m = MY0 + ((oy + ch - (y - view.ty) / view.k) / ch) * (MY1 - MY0);
     return (Math.atan(Math.exp(m)) - Math.PI / 4) * 360 / Math.PI;
   };
+}
+
+/* Zoom about the pointer, so the thing under the cursor stays under it. */
+function zoomAt(cx, cy, factor) {
+  const k = Math.max(1, Math.min(40, view.k * factor));
+  const f = k / view.k;
+  view.tx = cx - (cx - view.tx) * f;
+  view.ty = cy - (cy - view.ty) * f;
+  view.k = k;
+  clampPan();
+}
+
+/* At k = 1 the map is exactly framed, so there is nothing to pan to; further
+   in, panning stops at the edge rather than letting the map drift off. */
+function clampPan() {
+  const over = (view.k - 1);
+  const maxX = state.w * over, maxY = state.h * over;
+  view.tx = Math.min(0, Math.max(-maxX, view.tx));
+  view.ty = Math.min(0, Math.max(-maxY, view.ty));
+  if (view.k === 1) { view.tx = 0; view.ty = 0; }
+}
+
+function wireZoom(canvas) {
+  // Canvas pixels, not CSS pixels: the frame is drawn at its export size and
+  // scaled down to fit the window, and a wheel event knows nothing about that.
+  const toCanvas = (e) => {
+    const r = canvas.getBoundingClientRect();
+    return [(e.clientX - r.left) / r.width * state.w,
+            (e.clientY - r.top) / r.height * state.h];
+  };
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const [x, y] = toCanvas(e);
+    zoomAt(x, y, Math.exp(-e.deltaY * 0.0015));
+    updateZoomUi();
+  }, { passive: false });
+
+  let drag = null;
+  canvas.addEventListener('pointerdown', (e) => {
+    drag = { ...toCanvas(e), tx: view.tx, ty: view.ty };
+    drag.x = toCanvas(e)[0]; drag.y = toCanvas(e)[1];
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = 'grabbing';
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const [x, y] = toCanvas(e);
+    view.tx = drag.tx + (x - drag.x);
+    view.ty = drag.ty + (y - drag.y);
+    clampPan();
+  });
+  const end = () => { drag = null; canvas.style.cursor = view.k > 1 ? 'grab' : 'default'; };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('dblclick', (e) => {
+    const [x, y] = toCanvas(e);
+    zoomAt(x, y, e.shiftKey ? 1 / 1.8 : 1.8);
+    updateZoomUi();
+  });
+}
+
+function updateZoomUi() {
+  const z = $('zoom');
+  if (z) z.textContent = view.k > 1.02 ? `${view.k.toFixed(1)}x` : '';
+  const r = $('reset');
+  if (r) r.hidden = view.k <= 1.02;
+  $('c').style.cursor = view.k > 1 ? 'grab' : 'default';
 }
 
 /* ------------------------------------------------------------ the field */
@@ -105,6 +182,8 @@ function drawLand(ctx) {
   ctx.fillStyle = '#0a0d11';
   for (const r of state.geo.lakes) if (near(r)) { ring(r); ctx.fill(); }
   ctx.strokeStyle = 'rgba(190, 205, 220, .20)';
+  // Constant on screen whatever the zoom: a coastline is a hairline, not a
+  // feature with a width.
   ctx.lineWidth = 0.8; ctx.lineJoin = 'round';
   for (const r of state.geo.land) if (near(r)) { ring(r); ctx.stroke(); }
 }
@@ -422,6 +501,27 @@ async function boot() {
   resize();
   window.addEventListener('resize', resize);
   $('size').onchange = resize;
+  wireZoom($('c'));
+  /* ?zoom=4&at=57.5,-3 frames a corner of the map, which is how you share
+     "look at the Moray Firth" rather than describing it. */
+  if (q.has('zoom')) {
+    view.k = Math.max(1, Math.min(40, Number(q.get('zoom')) || 1));
+    const at = (q.get('at') || '').split(',').map(Number);
+    const lat = at.length === 2 && isFinite(at[0]) ? at[0]
+      : (VIEW.south + VIEW.north) / 2;
+    const lon = at.length === 2 && isFinite(at[1]) ? at[1]
+      : (VIEW.west + VIEW.east) / 2;
+    view.tx = 0; view.ty = 0;
+    setProjection(state.w, state.h);
+    view.tx = state.w / 2 - px(lon);
+    view.ty = state.h / 2 - py(lat);
+    clampPan();
+  }
+  $('reset').onclick = () => {
+    view.k = 1; view.tx = 0; view.ty = 0;
+    updateZoomUi();
+  };
+  updateZoomUi();
   sel.onchange = () => loadSpecies(sel.value);
   $('play').textContent = state.playing ? 'Pause' : 'Play';
   $('when').textContent = state.d.times[Math.round(state.t)];
