@@ -22,6 +22,7 @@ The method, and its limits:
 """
 import argparse
 import json
+import re
 import sqlite3
 from datetime import date, timedelta
 
@@ -74,7 +75,7 @@ def _load(species, start=None, end=None):
     therefore ends in a fade that is an artefact of publishing, not of birds.
     """
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-    sql = ("SELECT obs_date, lat, lon, count, sci, common FROM occurrence"
+    sql = ("SELECT obs_date, lat, lon, count, sci, common, locality FROM occurrence"
            " WHERE (sci LIKE ? OR common LIKE ?)")
     args = [f"{species}%", species]
     if start:
@@ -130,7 +131,7 @@ def _weekly_points(rows, weeks, first):
     separate rather than smearing the records into the model.
     """
     buckets = [[] for _ in weeks]
-    for (iso, lat, lon, _cnt, _sci, _com) in rows:
+    for (iso, lat, lon, _cnt, _sci, _com, _loc) in rows:
         w = (date.fromisoformat(iso) - first).days // 7
         if 0 <= w < len(weeks):
             buckets[w].extend((round(lat, 2), round(lon, 2)))
@@ -149,7 +150,7 @@ def _weekly_surfaces(rows, g):
         d += timedelta(days=7)
 
     stack = np.zeros((len(weeks), g["rows"], g["cols"]))
-    for (iso, lat, lon, cnt, _sci, _com), day in zip(rows, days):
+    for (iso, lat, lon, cnt, _sci, _com, _loc), day in zip(rows, days):
         w = (day - first).days // 7
         r = int(round((lat - g["lat0"]) / g["dlat"]))
         c = int(round((lon - g["lon0"]) / g["dlon"]))
@@ -273,6 +274,117 @@ def _arcs(a, b, g):
     return out[:MAX_ARCS]
 
 
+HOTSPOTS = 10
+HOTSPOT_CELL = (0.08, 0.15)      # degrees, about 9 km x 10 km at these latitudes
+HOTSPOT_APART_KM = 85            # two labels nearer than this are one place
+GAZ_RADIUS_KM = 5
+# Organisation suffixes. Useful in a gazetteer, clutter on a map.
+_ORG_SUFFIX = re.compile(
+    r"\s+(RSPB Reserve|RSPB|SWT NR|NWT NR|LWT NR|WT NR|WWT|LNR|NNR|NR|SSSI)$", re.I)
+
+# eBird location ids leak into GBIF's locality field as bare codes. They are
+# names of nothing.
+_LOC_CODE = re.compile(r"^L\d+$")
+
+
+def _clean_locality(name):
+    if not name:
+        return None
+    n = name.strip()
+    if _LOC_CODE.match(n):
+        return None
+    # eBird writes sub-sites after a double dash; the parent is the place.
+    n = n.split("--")[0].strip()
+    n = re.sub(r"^(WWT|RSPB|NNR|SSSI)\s+", "", n)
+    n = n.split(",")[0].strip()
+    # "Druridge Pools NWT NR and Druridge Links" is a gazetteer entry, not a
+    # caption. Keep the first place it names.
+    n = re.split(r"\s+(?:and|&)\s+", n)[0].strip()
+    n = _ORG_SUFFIX.sub("", n).strip()
+    n = re.sub(r"\s+(RSPB|WWT|NWT|LWT|SWT|NNR|LNR|SSSI|NR)\b", "", n).strip()
+    n = n.rstrip(" -–—")
+    # Longer than this and it stops being a label and starts being a sentence.
+    if len(n) > 26:
+        words = n.split()
+        while len(" ".join(words)) > 26 and len(words) > 1:
+            words.pop()
+        n = " ".join(words)
+    if len(n) < 3 or n.isdigit():
+        return None
+    return n
+
+
+def _gazetteer():
+    """Britain and Ireland only, but well named there - 36,000 eBird hotspots.
+    Everywhere else falls back to whatever GBIF's locality field says."""
+    try:
+        conn = sqlite3.connect(f"file:{DATA / 'sightings.db'}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT name, lat, lon, weight FROM gazetteer WHERE kind = 'hotspot'"
+        ).fetchall()
+        conn.close()
+        return rows
+    except sqlite3.Error:
+        return []
+
+
+def _hotspots(rows, limit=HOTSPOTS):
+    """The handful of places this species is actually reported from.
+
+    Counted over the whole window rather than per week, so the labels stay put
+    while the year runs - a caption that moves every frame is noise. Reports,
+    not birds, so this is where the species and the birdwatchers overlap.
+    """
+    dlat, dlon = HOTSPOT_CELL
+    cells = {}
+    for (iso, lat, lon, cnt, _sci, _com, loc) in rows:
+        key = (round(lat / dlat), round(lon / dlon))
+        c = cells.setdefault(key, {"n": 0, "birds": 0.0, "lat": 0.0, "lon": 0.0,
+                                   "w": 0.0, "names": {}})
+        c["n"] += 1
+        # Ranked by birds, not by reports. Reports measure birdwatchers: on
+        # this species they put Titchwell above Montrose Basin, which holds
+        # forty thousand geese. Counts are on 86% of records, so use them.
+        birds = float(cnt) if cnt else 1.0
+        c["birds"] += birds
+        # And the centre is where the birds are, not the middle of the cell -
+        # which is what lets a 5 km gazetteer match land on the right reserve.
+        c["lat"] += lat * birds
+        c["lon"] += lon * birds
+        c["w"] += birds
+        clean = _clean_locality(loc)
+        if clean:
+            c["names"][clean] = c["names"].get(clean, 0) + birds
+
+    ranked = sorted(cells.values(), key=lambda c: -c["birds"])
+    gaz = _gazetteer()
+    out = []
+    for c in ranked:
+        if len(out) >= limit:
+            break
+        lat, lon = c["lat"] / c["w"], c["lon"] / c["w"]
+        if any(_haversine(lat, lon, o["lat"], o["lon"]) < HOTSPOT_APART_KM
+               for o in out):
+            continue
+        name = None
+        if gaz and 49 < lat < 62 and -11 < lon < 3:
+            # Best known site within reach, rather than merely the closest -
+            # weight is how established a hotspot is, and picking the nearest
+            # thing labelled a goose roost "Bempton Cliffs", which is a
+            # seabird colony that happened to be ten kilometres away.
+            near = [(w, _clean_locality(n) or n) for n, la, lo, w in gaz
+                    if _haversine(lat, lon, la, lo) < GAZ_RADIUS_KM]
+            if near:
+                name = max(near)[1]
+        if not name and c["names"]:
+            name = max(c["names"].items(), key=lambda kv: kv[1])[0]
+        if not name or any(o["name"] == name for o in out):
+            continue
+        out.append({"name": name, "lat": round(lat, 3), "lon": round(lon, 3),
+                    "reports": c["n"], "birds": int(c["birds"])})
+    return out
+
+
 def build(species, out_path=None, start=None, end=None):
     rows = _load(species, start, end)
     g = _grid()
@@ -306,6 +418,9 @@ def build(species, out_path=None, start=None, end=None):
     log.info("share of the population on the move: quietest %.3f, busiest %.3f",
              min(moved), max(moved))
 
+    spots = _hotspots(rows)
+    log.info("hotspots: %s", ", ".join(h["name"] for h in spots) or "none named")
+
     sci = rows[0][4] or species
     common = _english_name(sci) or species
     payload = {
@@ -315,6 +430,7 @@ def build(species, out_path=None, start=None, end=None):
         "times": [w.isoformat() for w in weeks],
         "n": ns,
         "arcs": arcs,
+        "hotspots": spots,
         "points": points,
         "units": {"points": "observed report positions, [lat,lon,...] per week",
                   "arcs": "[fromLat, fromLon, toLat, toLon, share, km] per week",
@@ -327,22 +443,55 @@ def build(species, out_path=None, start=None, end=None):
                   "it carries observer effort with it.",
         "generated": date.today().isoformat(),
     }
-    out = out_path or (WEB_DATA / "migration.json")
-    WEB_DATA.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9]+", "-", sci.lower()).strip("-")
+    outdir = WEB_DATA / "migration"
+    outdir.mkdir(parents=True, exist_ok=True)
+    out = out_path or (outdir / f"{slug}.json")
     out.write_text(json.dumps(payload, separators=(",", ":")))
-    log.info("wrote %s (%.1f MB)", out, out.stat().st_size / 1e6)
+    log.info("wrote %s (%.1f MB)", out.name, out.stat().st_size / 1e6)
+    _write_index(outdir)
     return out
+
+
+def _write_index(outdir):
+    """What the viewer offers in its species menu, rebuilt from whatever has
+    actually been produced - so a half-finished run cannot advertise a file
+    that is not there."""
+    items = []
+    for f in sorted(outdir.glob("*.json")):
+        if f.name == "index.json":
+            continue
+        d = json.loads(f.read_text())
+        moving = sum(1 for wk in d["arcs"] if wk)
+        items.append({"slug": f.stem, "common": d["species"]["common"],
+                      "sci": d["species"]["sci"], "records": d["records"],
+                      "weeks": len(d["times"]), "movingWeeks": moving})
+    items.sort(key=lambda i: i["common"])
+    (outdir / "index.json").write_text(json.dumps(items, separators=(",", ":")))
+    log.info("index: %d species", len(items))
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--species", required=True)
+    ap.add_argument("--species", nargs="*", default=None,
+                    help="omit to build every species in the backfill")
     ap.add_argument("--from", dest="start", help="YYYY-MM-DD")
     ap.add_argument("--to", dest="end", help="YYYY-MM-DD")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
     setup_logging(a.verbose)
-    build(a.species, start=a.start, end=a.end)
+    names = a.species
+    if not names:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        names = [r[0] for r in conn.execute(
+            "SELECT DISTINCT sci FROM occurrence ORDER BY sci") if r[0]]
+        conn.close()
+        log.info("building %d species from the backfill", len(names))
+    for name in names:
+        try:
+            build(name, start=a.start, end=a.end)
+        except SystemExit as e:
+            log.error("%s: %s", name, e)
 
 
 if __name__ == "__main__":

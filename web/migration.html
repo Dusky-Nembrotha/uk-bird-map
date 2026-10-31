@@ -31,7 +31,8 @@
   button:hover { background: rgba(255,255,255,.16); }
   select, input[type=range] { font: inherit; color: #f0efec; background: rgba(255,255,255,.07);
     border: 1px solid rgba(255,255,255,.16); border-radius: 8px; padding: 4px 8px; }
-  input[type=range] { padding: 0; width: 220px; }
+  input[type=range] { padding: 0; width: 190px; }
+  #species { max-width: 200px; }
   .lbl { font-size: 12px; color: #a9a8a2; font-variant-numeric: tabular-nums; }
   #loading { position: fixed; inset: 0; display: grid; place-items: center;
     color: #a9a8a2; font-size: 14px; }
@@ -45,6 +46,7 @@
 <div id="loading">Reading the migration field…</div>
 
 <div id="bar" hidden>
+  <select id="species" aria-label="Species"></select>
   <button id="play">Pause</button>
   <input id="scrub" type="range" min="0" max="52" step="0.01" value="0">
   <span class="lbl" id="when">—</span>

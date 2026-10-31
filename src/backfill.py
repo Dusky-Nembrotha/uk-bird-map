@@ -16,6 +16,8 @@ eBird adapter only ever saw the last fortnight.
 """
 import argparse
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 from .config import AREA_BBOX, DATA
@@ -30,6 +32,25 @@ MAX_OFFSET = 100_000
 
 DB_PATH = DATA / "migration.db"
 _limiter = RateLimiter(0.4)
+_limiter_lock = threading.Lock()
+
+
+class _Paced:
+    """The shared limiter, made safe to call from several threads."""
+
+    def wait(self):
+        with _limiter_lock:
+            _limiter.wait()
+
+
+_paced = _Paced()
+
+# GBIF's latency wanders between half a second and six seconds a page for no
+# reason visible from here, and a year of a common species is hundreds of
+# pages. Months are fetched a few at a time so a slow spell costs wall clock
+# instead of the whole run. The shared limiter still paces every request, so
+# this overlaps waiting rather than raising the rate.
+WORKERS = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS occurrence (
@@ -41,7 +62,8 @@ CREATE TABLE IF NOT EXISTS occurrence (
   lat         REAL NOT NULL,
   lon         REAL NOT NULL,
   count       INTEGER,
-  dataset     TEXT
+  dataset     TEXT,
+  locality    TEXT
 );
 CREATE INDEX IF NOT EXISTS occ_sp_date ON occurrence (species_key, obs_date);
 """
@@ -51,6 +73,10 @@ def connect():
     DATA.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(SCHEMA)
+    # Added after the first backfills had already run.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(occurrence)")}
+    if "locality" not in cols:
+        conn.execute("ALTER TABLE occurrence ADD COLUMN locality TEXT")
     return conn
 
 
@@ -72,12 +98,25 @@ def _polygon():
             f"{b['west']} {b['south']}))")
 
 
-def _month_edges(months):
-    """Month boundaries back from today, newest window last."""
+def _month_edges(months=None, start=None, end=None):
+    """Month boundaries, oldest first.
+
+    Either a count of months back from today, or an explicit window - which is
+    what you want in practice, because the window worth building on is a
+    complete year that ended before GBIF's publication lag begins.
+    """
+    if start and end:
+        a, b = date.fromisoformat(start), date.fromisoformat(end)
+        edges, cur = [a], a.replace(day=1)
+        while cur <= b:
+            nxt = (cur + timedelta(days=32)).replace(day=1)
+            edges.append(min(nxt, b))
+            cur = nxt
+        return sorted(set(edges))
     today = date.today()
     edges = [today]
     cur = today.replace(day=1)
-    for _ in range(months):
+    for _ in range(months or 12):
         edges.append(cur)
         cur = (cur - timedelta(days=1)).replace(day=1)
     return list(reversed(edges))
@@ -87,7 +126,7 @@ def _rows(key, start, end):
     """Every occurrence of one species in one month window."""
     out, offset = [], 0
     while offset < MAX_OFFSET:
-        data = request_json("GET", SEARCH, limiter=_limiter, timeout=120, params={
+        data = request_json("GET", SEARCH, limiter=_paced, timeout=120, params={
             "taxonKey": key,
             "hasCoordinate": "true",
             "hasGeospatialIssue": "false",
@@ -108,28 +147,39 @@ def _rows(key, start, end):
                         rec.get("species") or rec.get("scientificName") or "",
                         rec.get("vernacularName"), obs, float(lat), float(lon),
                         n if isinstance(n, int) else None,
-                        rec.get("datasetName")))
+                        rec.get("datasetName"),
+                        rec.get("locality") or rec.get("verbatimLocality")))
         if data.get("endOfRecords") or not data.get("results"):
             break
         offset += PAGE
     return out
 
 
-def backfill(name, months=12):
+def backfill(name, months=12, start=None, end=None):
     key, sci, canonical = taxon_key(name)
     log.info("%s -> GBIF taxon %s (%s)", name, key, sci)
     conn = connect()
-    edges = _month_edges(months)
+    edges = _month_edges(months, start, end)
     total = 0
-    for start, end in zip(edges, edges[1:]):
-        rows = _rows(key, start, end)
-        with conn:
-            conn.executemany(
-                "INSERT INTO occurrence (uid, species_key, sci, common, obs_date,"
-                " lat, lon, count, dataset) VALUES (?,?,?,?,?,?,?,?,?)"
-                " ON CONFLICT(uid) DO NOTHING", rows)
-        total += len(rows)
-        log.info("  %s  %6d records", start.isoformat()[:7], len(rows))
+    windows = list(zip(edges, edges[1:]))
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = {pool.submit(_rows, key, a, b): a for a, b in windows}
+        # Written back in calendar order whatever order they land in, so the
+        # log reads as a year rather than as a race. SQLite is touched only
+        # here, on one thread.
+        for a, fut in sorted(((a, f) for f, a in futures.items()),
+                             key=lambda t: t[0]):
+            rows = fut.result()
+            with conn:
+                conn.executemany(
+                    "INSERT INTO occurrence (uid, species_key, sci, common,"
+                    " obs_date, lat, lon, count, dataset, locality)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)"
+                    " ON CONFLICT(uid) DO UPDATE SET"
+                    " locality = COALESCE(excluded.locality, occurrence.locality)",
+                    rows)
+            total += len(rows)
+            log.info("  %s  %6d records", a.isoformat()[:7], len(rows))
     held = conn.execute("SELECT COUNT(*) FROM occurrence WHERE species_key = ?",
                         (key,)).fetchone()[0]
     span = conn.execute("SELECT MIN(obs_date), MAX(obs_date) FROM occurrence"
@@ -143,12 +193,19 @@ def backfill(name, months=12):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--species", "--sci", dest="species", required=True,
-                    help="common or scientific name, e.g. 'Anser brachyrhynchus'")
+                    nargs="+",
+                    help="one or more names, e.g. 'Anser brachyrhynchus'")
     ap.add_argument("--months", type=int, default=12)
+    ap.add_argument("--from", dest="start", help="YYYY-MM-DD")
+    ap.add_argument("--to", dest="end", help="YYYY-MM-DD")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
     setup_logging(a.verbose)
-    backfill(a.species, a.months)
+    for name in a.species:
+        try:
+            backfill(name, a.months, a.start, a.end)
+        except SystemExit as e:
+            log.error("%s: %s", name, e)
 
 
 if __name__ == "__main__":

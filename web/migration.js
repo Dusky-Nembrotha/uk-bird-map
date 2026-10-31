@@ -216,6 +216,58 @@ function drawJourneys(ctx, now) {
   ctx.restore();
 }
 
+/* The places themselves.
+
+   A migration map that names nowhere is a pattern; the names are what make it
+   somewhere. Ranked by birds rather than by reports - reports measure
+   birdwatchers, and on this species they put Titchwell above Montrose Basin,
+   which holds forty thousand geese. */
+
+function drawHotspots(ctx) {
+  const spots = state.d.hotspots || [];
+  if (!spots.length) return;
+  const S = state.h / 1920;
+  ctx.font = `600 ${Math.round(21 * S)}px system-ui, -apple-system, sans-serif`;
+  ctx.textBaseline = 'middle';
+  const placed = [];
+  // The biggest first, so when two labels fight it is the lesser that loses.
+  for (const sp of spots) {
+    const x = px(sp.lon), y = py(sp.lat);
+    if (x < 10 || y < 10 || x > state.w - 10 || y > state.h - 10) continue;
+
+    const w = ctx.measureText(sp.name).width;
+    const gap = 11 * S;
+    const options = [
+      [x + gap, y, 'left'], [x - gap, y, 'right'],
+      [x, y - gap * 1.5, 'centre'], [x, y + gap * 1.5, 'centre'],
+    ];
+    let put = null;
+    for (const [lx, ly, align] of options) {
+      const x0 = align === 'left' ? lx : align === 'right' ? lx - w : lx - w / 2;
+      if (x0 < 6 || x0 + w > state.w - 6) continue;
+      const clash = placed.some((q) =>
+        lx < q.x1 + 8 * S && x0 < q.x1 + 8 * S && x0 + w > q.x0 - 8 * S
+        && Math.abs(ly - q.y) < 22 * S);
+      if (!clash) { put = { x0, y: ly, align, x1: x0 + w }; break; }
+    }
+    // A ring marks the place whether or not its name would fit.
+    ctx.beginPath();
+    ctx.arc(x, y, 3.1 * S, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,.78)';
+    ctx.lineWidth = 1.3 * S;
+    ctx.stroke();
+    if (!put) continue;
+    placed.push(put);
+
+    ctx.textAlign = 'left';
+    ctx.shadowColor = 'rgba(0,0,0,.85)';
+    ctx.shadowBlur = 5 * S;
+    ctx.fillStyle = 'rgba(255,255,255,.90)';
+    ctx.fillText(sp.name, put.x0, put.y);
+    ctx.shadowBlur = 0;
+  }
+}
+
 /* ------------------------------------------------------------------ HUD */
 
 const MONTHS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
@@ -286,6 +338,7 @@ function frame(now) {
   drawLand(ctx);
   drawReports(ctx, state.t);
   drawJourneys(ctx, now / 1000);
+  drawHotspots(ctx);
   drawHud(ctx, state.t);
 
   if (state.playing) {
@@ -315,23 +368,51 @@ function resize() {
   setProjection(w, h);
 }
 
+async function loadSpecies(slug) {
+  const d = await fetch(`data/migration/${slug}.json`).then((r) => r.json());
+  state.d = d;
+  state.weeks = d.times.length;
+  state.t = Math.min(state.t, state.weeks - 1);
+  $('scrub').max = state.weeks - 1;
+  $('scrub').value = state.t;
+  $('when').textContent = d.times[Math.round(state.t)];
+  const url = new URL(location);
+  url.searchParams.set('species', slug);
+  history.replaceState(null, '', url);
+}
+
 async function boot() {
-  const [d, geo] = await Promise.all([
-    fetch('data/migration.json').then((r) => r.json()),
-    fetch('data/geo.json').then((r) => r.json()),
-  ]).catch(() => []);
-  if (!d) {
-    $('loading').textContent = 'No migration field. Run: python3 -m src.backfill '
-      + '--species "Anser brachyrhynchus" then python3 -m src.migration --species ...';
+  let index, geo;
+  try {
+    [index, geo] = await Promise.all([
+      fetch('data/migration/index.json').then((r) => r.json()),
+      fetch('data/geo.json').then((r) => r.json()),
+    ]);
+  } catch (e) {
+    $('loading').textContent = 'No migration fields yet. Run: python3 -m '
+      + 'src.backfill --species "Anser brachyrhynchus" --from 2024-09-01 '
+      + '--to 2025-08-31, then python3 -m src.migration --from 2024-09-01 '
+      + '--to 2025-08-31';
     return;
   }
-  state.d = d; state.geo = geo; state.weeks = d.times.length;
-  $('scrub').max = state.weeks - 1;
+  state.geo = geo;
+
+  const q = new URLSearchParams(location.search);
+  const sel = $('species');
+  for (const it of index) {
+    const o = document.createElement('option');
+    o.value = it.slug;
+    // The count of weeks that actually move is the honest headline for a
+    // species here: a bird with two is a bird this method cannot see.
+    o.textContent = `${it.common} — ${it.movingWeeks} weeks on the move`;
+    sel.appendChild(o);
+  }
+  const want = q.get('species');
+  sel.value = index.some((i) => i.slug === want) ? want : index[0].slug;
+  await loadSpecies(sel.value);
+
   $('loading').hidden = true;
   $('bar').hidden = false;
-  // ?week=N holds the clip at one week (the journeys still animate, so a
-  // still frame has its comets); ?play=0 pauses wherever it starts.
-  const q = new URLSearchParams(location.search);
   if (q.has('week')) {
     state.t = Math.max(0, Math.min(state.weeks - 1, Number(q.get('week'))));
     state.playing = false;
@@ -341,8 +422,9 @@ async function boot() {
   resize();
   window.addEventListener('resize', resize);
   $('size').onchange = resize;
+  sel.onchange = () => loadSpecies(sel.value);
   $('play').textContent = state.playing ? 'Pause' : 'Play';
-  $('when').textContent = d.times[Math.round(state.t)];
+  $('when').textContent = state.d.times[Math.round(state.t)];
   $('scrub').value = state.t;
   $('play').onclick = () => {
     state.playing = !state.playing;
@@ -351,7 +433,7 @@ async function boot() {
   $('scrub').oninput = (e) => {
     state.playing = false; $('play').textContent = 'Play';
     state.t = Number(e.target.value);
-    $('when').textContent = d.times[Math.round(state.t)];
+    $('when').textContent = state.d.times[Math.round(state.t)];
   };
   requestAnimationFrame(frame);
 }
