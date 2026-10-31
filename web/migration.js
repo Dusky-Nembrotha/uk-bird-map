@@ -444,24 +444,43 @@ function reportLayer(w) {
   const g = c.getContext('2d');
   g.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
 
-  /* Inside the layer, light ink is added so overlapping reports pile up into
-     brightness; dark ink is laid normally, where repeated alpha over the same
-     colour converges on it, so a crowded estuary still ends up solid. Either
-     way the layer carries the density and the blit decides which way is up. */
-  g.globalCompositeOperation = pale() ? 'source-over' : 'lighter';
-  const halo = pale() ? '20, 60, 110' : '235, 244, 255';
-  const haloA = pale() ? 0.11 : 0.30;
-  const core = pale() ? 'rgba(12, 48, 92, 0.70)' : 'rgba(245, 250, 255, 0.85)';
+  /* One mark per place, not per report.
+
+     A report is a birder, not a bird. Yellow-browed Warbler is scarce here
+     and draws a crowd: in the week of 23 September 2024 its 1,431 reports
+     came from 537 places, and one square was logged 117 times - a single
+     celebrated bird, drawn as a hundred and seventeen stacked glows that
+     saturated into a floodlight. Flamborough Head carries 208 reports across
+     the year. Collapsing to distinct squares is the difference between
+     mapping the birds and mapping the twitch.
+
+     How often a place was reported still shows, but through a square root
+     and a cap, so a famous bird is a slightly larger mark rather than a
+     small sun. */
+  const places = new Map();
   for (let k = 0; k < arr.length; k += 2) {
-    const x = px(arr[k + 1]), y = py(arr[k]);
+    const key = arr[k] + ',' + arr[k + 1];
+    const at = places.get(key);
+    if (at) at.n += 1;
+    else places.set(key, { lat: arr[k], lon: arr[k + 1], n: 1 });
+  }
+
+  g.globalCompositeOperation = pale() ? 'source-over' : 'lighter';
+  const halo = pale() ? '20, 60, 110' : '214, 232, 252';
+  const core = pale() ? '12, 48, 92' : '240, 248, 255';
+  for (const pt of places.values()) {
+    const x = px(pt.lon), y = py(pt.lat);
     if (x < -20 || y < -20 || x > state.w + 20 || y > state.h + 20) continue;
-    const rg = g.createRadialGradient(x, y, 0, x, y, 9);
-    rg.addColorStop(0, `rgba(${halo}, ${haloA})`);
+    // 1 report -> 1.0, 16 -> 2.0, 100+ -> capped at 2.6.
+    const w8 = Math.min(2.6, Math.sqrt(Math.sqrt(pt.n)) );
+    const R = 4.2 * w8;
+    const rg = g.createRadialGradient(x, y, 0, x, y, R);
+    rg.addColorStop(0, `rgba(${halo}, ${pale() ? 0.10 : 0.16})`);
     rg.addColorStop(1, `rgba(${halo}, 0)`);
     g.fillStyle = rg;
-    g.beginPath(); g.arc(x, y, 9, 0, Math.PI * 2); g.fill();
-    g.fillStyle = core;
-    g.beginPath(); g.arc(x, y, 1.15, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(x, y, R, 0, Math.PI * 2); g.fill();
+    g.fillStyle = `rgba(${core}, ${pale() ? 0.72 : 0.80})`;
+    g.beginPath(); g.arc(x, y, 0.9 + 0.5 * w8, 0, Math.PI * 2); g.fill();
   }
 
   c._view = { k: view.k, tx: view.tx, ty: view.ty };
@@ -547,6 +566,19 @@ const at = (q, t) => {
 const SEG_BUDGET = 4200;
 const ALPHA_STEPS = 6;          // batching granularity, not a visible step
 
+/* Comets per unit of population moved.
+
+   The count used to be scaled against the busiest journey of whatever week
+   was showing, so a week in which almost nothing moved put as many birds in
+   the air as the peak of the spring departure. The number flying now follows
+   the absolute share of the population on the move: at this scale the
+   busiest week of the year carries a couple of hundred, and a quiet one
+   carries a handful, which is the point of watching it. */
+const COMET_SCALE = 1700;
+const COMET_MAX = 8;
+// The share at which a journey is drawn at full strength.
+const FULL_SHARE = 0.004;
+
 function drawJourneys(ctx, now) {
   const d = state.d;
   const i = Math.max(0, Math.min(d.arcs.length - 1, Math.floor(state.t)));
@@ -577,13 +609,13 @@ function drawJourneys(ctx, now) {
     path.lineTo(p2[0], p2[1]);
   };
 
-  const total = (d.arcs[i] || []).length + (d.arcs[j] || []).length;
-  // Shared out across both cross-faded weeks, so the budget is a frame budget.
-  const perArc = total ? Math.max(1, Math.floor(SEG_BUDGET / Math.max(1, total) / 5)) : 1;
+  // Only a ceiling now, not the thing that decides the count.
+  const moving = [...(d.arcs[i] || []), ...(d.arcs[j] || [])]
+    .reduce((m, a) => m + a[4], 0);
+  const squeeze = Math.min(1, SEG_BUDGET / Math.max(1, moving * COMET_SCALE * 5));
 
   const fly = (list, fade) => {
     if (fade <= 0.02) return;
-    const biggest = list.reduce((m, a) => Math.max(m, a[4]), 1e-9);
     list.forEach((a, k) => {
       const q = arcPath(a);
       if (q.len < 2) return;
@@ -591,10 +623,12 @@ function drawJourneys(ctx, now) {
          a journey six times longer on screen and the comets into rain. Bound
          it in pixels as well, so a bird stays a bird however far in you go. */
       const comet = Math.min(COMET, 70 / q.len);
-      const weight = a[4] / biggest;
-      // More of the population moving means more birds in the air, not a
-      // brighter smear: the count carries the quantity.
-      const n = Math.max(1, Math.min(1 + Math.round(weight * 5), perArc));
+      /* How much of the population this journey carries, against a fixed
+         reference rather than against the busiest journey on screen - the
+         latter is what made every week look equally busy. */
+      const weight = Math.min(1, a[4] / FULL_SHARE);
+      const n = Math.min(COMET_MAX, Math.round(a[4] * COMET_SCALE * squeeze));
+      if (n < 1) return;
       for (let b = 0; b < n; b++) {
         const phase = (now * SPEED + k * 0.37 + b / n) % 1;
         const head = at(q, phase);
@@ -778,7 +812,8 @@ function drawHud(ctx, t) {
   /* The bar is a fixed number of real pixels tall, so the footer has to be
      too - scaling it with the frame tucked it under the controls on a phone. */
   const foot = Math.max(118, 150 * S);
-  ctx.fillText((pale() ? 'Dark: birds reported' : 'Bright: birds reported'), pad, state.h - foot);
+  ctx.fillText('One mark per place · larger where reported more often',
+               pad, state.h - foot);
   ctx.fillStyle = C.secondary;
   ctx.font = `500 ${Math.round(16 * S)}px system-ui, sans-serif`;
   ctx.fillText('Lines: modelled movement, not tracked birds', pad, state.h - foot + 26 * S);

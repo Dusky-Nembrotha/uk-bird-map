@@ -196,7 +196,47 @@ def _haversine(lat1, lon1, lat2, lon2):
     return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
-def _arcs(a, b, g):
+def _cell_places(rows, weeks, first, g):
+    """For each week and grid cell, the real place birds were reported from.
+
+    The arcs were drawn between cell centres - squares about a hundred
+    kilometres across, whose middles are frequently open sea and never
+    coincide with the dots on the map. So a journey appeared to set off from
+    nowhere in particular and land nowhere in particular, which is exactly
+    what it looked like. Snapping each end to the busiest reported square in
+    that cell makes a journey leave a place and arrive at one.
+    """
+    per = [dict() for _ in weeks]
+    for (iso, lat, lon, cnt, _sci, _com, _loc) in rows:
+        w = (date.fromisoformat(iso) - first).days // 7
+        if not (0 <= w < len(weeks)):
+            continue
+        r = int(round((lat - g["lat0"]) / g["dlat"]))
+        c = int(round((lon - g["lon0"]) / g["dlon"]))
+        tally = per[w].setdefault((r, c), {})
+        key = (round(lat, 2), round(lon, 2))
+        tally[key] = tally.get(key, 0) + 1
+    # Merged over the same window the surfaces are smoothed across. The arcs
+    # are differenced on a three-week mean, so a cell can be a source in the
+    # mean while holding no report in that single week - snapping to the week
+    # alone left two thirds of journeys falling back to a cell centre.
+    k = TEMPORAL_SMOOTH // 2
+    out = []
+    for w in range(len(weeks)):
+        tally = {}
+        for v in range(max(0, w - k), min(len(weeks), w + k + 1)):
+            # The week itself counts double, so a place it does hold wins.
+            weight = 2 if v == w else 1
+            for cell, places in per[v].items():
+                acc = tally.setdefault(cell, {})
+                for key, n in places.items():
+                    acc[key] = acc.get(key, 0) + n * weight
+        out.append({cell: max(acc.items(), key=lambda kv: kv[1])[0]
+                    for cell, acc in tally.items()})
+    return out
+
+
+def _arcs(a, b, g, place_a=None, place_b=None):
     """Where birds left, and where they turned up.
 
     Optical flow was the wrong instrument. It fits a smooth, continuous
@@ -245,21 +285,56 @@ def _arcs(a, b, g):
 
     lat_of = lambda r: g["lat0"] + r * g["dlat"]
     lon_of = lambda c: g["lon0"] + c * g["dlon"]
+
+    def anchor(places, r, c):
+        """The reported place this cell stands for, searching outward a little.
+
+        The surface is smoothed across some eighty cells, so a cell can carry
+        mass that bled in from its neighbours while holding no sighting of its
+        own - which is how half of all journeys ended up pinned to a cell
+        centre in open sea. Look outward two cells for somewhere real, and if
+        there is nowhere, say so: a journey between two places nobody reported
+        the bird from is an artefact of the blur, not a migration.
+        """
+        if not places:
+            return None
+        hit = places.get((r, c))
+        if hit:
+            return hit
+        for ring in (1, 2):
+            best, found = None, None
+            for dr in range(-ring, ring + 1):
+                for dc in range(-ring, ring + 1):
+                    if max(abs(dr), abs(dc)) != ring:
+                        continue
+                    got = places.get((r + dr, c + dc))
+                    if got is None:
+                        continue
+                    d2 = dr * dr + dc * dc
+                    if best is None or d2 < best:
+                        best, found = d2, got
+            if found:
+                return found
+        return None
     src.sort(reverse=True)
     out = []
     for smass, sr, sc in src:
-        slat, slon = lat_of(sr), lon_of(sc)
+        start = anchor(place_a, sr, sc)
+        if start is None:
+            continue
+        slat, slon = start
         # Nearest sinks first: a bird leaving the Ouse Washes is far likelier
         # to have gone to the Wash than to Iceland.
-        order = sorted(range(len(dst)), key=lambda i: _haversine(
-            slat, slon, lat_of(dst[i][1]), lon_of(dst[i][2])))
+        ends = [anchor(place_b, d_[1], d_[2]) for d_ in dst]
+        order = sorted((i for i in range(len(dst)) if ends[i]),
+                       key=lambda i: _haversine(slat, slon, *ends[i]))
         for i in order:
             if smass <= 1e-9:
                 break
             dmass, dr, dc = dst[i]
             if dmass <= 1e-9:
                 continue
-            dlat, dlon = lat_of(dr), lon_of(dc)
+            dlat, dlon = ends[i]
             km = _haversine(slat, slon, dlat, dlon)
             if km > MAX_HOP_KM:
                 continue
@@ -415,10 +490,11 @@ def build(species, out_path=None, start=None, end=None):
     smooth = np.stack([stack[max(0, w - k // 2):w + k // 2 + 1].mean(axis=0)
                        for w in range(len(weeks))])
 
+    cells = _cell_places(rows, weeks, first, g)
     arcs, ns = [], []
     for w in range(len(weeks)):
         nxt = min(len(weeks) - 1, w + 1)
-        arcs.append(_arcs(smooth[w], smooth[nxt], g))
+        arcs.append(_arcs(smooth[w], smooth[nxt], g, cells[w], cells[nxt]))
         ns.append(np.round(norm[w], 4).ravel().tolist())
 
     moved = [sum(a[4] for a in wk) for wk in arcs]
