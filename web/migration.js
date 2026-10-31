@@ -403,7 +403,13 @@ function drawReports(ctx, t) {
   const j = Math.min(d.points.length - 1, i + 1);
   const f = t - i;
   ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
+  /* The blend has to turn over with the ground, not just the colour. On a
+     dark map the marks are added, so overlapping reports pile up into light
+     and density reads as brightness. Painting dark ink additively onto a
+     white basemap adds nothing at all - which is why the data disappeared
+     rather than merely dimmed. Multiply is the same idea the other way up:
+     overlap darkens, and a crowded estuary still shows as crowded. */
+  ctx.globalCompositeOperation = pale() ? 'multiply' : 'lighter';
   const paint = (arr, alpha) => {
     if (alpha <= 0.01) return;
     for (let k = 0; k < arr.length; k += 2) {
@@ -411,11 +417,14 @@ function drawReports(ctx, t) {
       if (x < -20 || y < -20 || x > state.w + 20 || y > state.h + 20) continue;
       const g = ctx.createRadialGradient(x, y, 0, x, y, 9);
       const halo = pale() ? '20, 60, 110' : '235, 244, 255';
-      g.addColorStop(0, `rgba(${halo}, ${(pale() ? 0.22 : 0.30) * alpha})`);
+      /* Gentler on the pale ground than on the dark one. Multiply compounds:
+         twenty reports on an estuary stack into solid black at the alpha that
+         merely glows white when it is added. */
+      g.addColorStop(0, `rgba(${halo}, ${(pale() ? 0.11 : 0.30) * alpha})`);
       g.addColorStop(1, `rgba(${halo}, 0)`);
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = pale() ? `rgba(12, 48, 92, ${0.88 * alpha})`
+      ctx.fillStyle = pale() ? `rgba(12, 48, 92, ${0.70 * alpha})`
                              : `rgba(245, 250, 255, ${0.85 * alpha})`;
       ctx.beginPath(); ctx.arc(x, y, 1.15, 0, Math.PI * 2); ctx.fill();
     }
@@ -468,7 +477,13 @@ function drawJourneys(ctx, now) {
   const f = state.t - i;
 
   ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
+  /* The blend has to turn over with the ground, not just the colour. On a
+     dark map the marks are added, so overlapping reports pile up into light
+     and density reads as brightness. Painting dark ink additively onto a
+     white basemap adds nothing at all - which is why the data disappeared
+     rather than merely dimmed. Multiply is the same idea the other way up:
+     overlap darkens, and a crowded estuary still shows as crowded. */
+  ctx.globalCompositeOperation = pale() ? 'multiply' : 'lighter';
   ctx.lineCap = 'round';
 
   const fly = (list, fade) => {
@@ -564,6 +579,27 @@ function drawHotspots(ctx) {
 
 /* ------------------------------------------------------------------ HUD */
 
+/* The HUD's ink, by role rather than by hex.
+
+   Every caption on the frame was written white, which was right while the
+   ground was always dark and became invisible the moment a pale basemap
+   arrived. Scattering pale() ternaries through the drawing code would have
+   worked and would have had to be done again for the next backdrop, so the
+   decision lives here instead and the HUD asks for "primary" or "muted".
+
+   The shadow matters as much as the fill: a title has to cross coastlines and
+   cities, and on either ground a hairline of the opposite tone behind it is
+   what keeps it readable. */
+function ink() {
+  return pale()
+    ? { primary: '#0f2236', secondary: 'rgba(15,34,54,.78)',
+        muted: 'rgba(15,34,54,.60)', hair: 'rgba(15,34,54,.38)',
+        warn: '#8a4b00', shadow: 'rgba(255,255,255,.85)' }
+    : { primary: '#ffffff', secondary: 'rgba(255,255,255,.72)',
+        muted: 'rgba(255,255,255,.62)', hair: 'rgba(255,255,255,.34)',
+        warn: 'rgba(255,214,140,.92)', shadow: 'rgba(0,0,0,.72)' };
+}
+
 const MONTHS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
 
 function drawHud(ctx, t) {
@@ -576,8 +612,12 @@ function drawHud(ctx, t) {
   const S = Math.min(state.h / 1920, W / 1080);
   const pad = 54 * S;
 
+  const C = ink();
+  ctx.save();
+  ctx.shadowColor = C.shadow;
+  ctx.shadowBlur = 6 * S;
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = C.primary;
   // And then made to fit outright, because "YELLOW-BROWED WARBLER" is twice
   // the length of "BRENT GOOSE" and no single scale suits both.
   const title = d.species.common.toUpperCase();
@@ -600,19 +640,19 @@ function drawHud(ctx, t) {
     const m = (x) => x.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
     return `${m(f)} – ${m(t)} · PART YEAR`.toUpperCase();
   })();
-  ctx.fillStyle = span.complete ? 'rgba(255,255,255,.72)' : 'rgba(255,214,140,.92)';
+  ctx.fillStyle = span.complete ? C.secondary : C.warn;
   ctx.font = `600 ${Math.round(23 * S)}px system-ui, -apple-system, sans-serif`;
   ctx.textAlign = 'right';
   ctx.fillText(sub, W - pad, 192 * S);
 
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = C.primary;
   ctx.font = `800 ${Math.round(46 * S)}px system-ui, -apple-system, sans-serif`;
   ctx.fillText(when.toLocaleDateString('en-GB',
     { day: 'numeric', month: 'short' }).toUpperCase(), W - pad, 252 * S);
 
   // The month axis, with the playhead on it.
   const axW = Math.min(330 * S, W * 0.46), axX = W - pad - axW, axY = 288 * S;
-  ctx.strokeStyle = 'rgba(255,255,255,.34)';
+  ctx.strokeStyle = C.hair;
   ctx.lineWidth = 1.2 * S;
   ctx.beginPath(); ctx.moveTo(axX, axY); ctx.lineTo(axX + axW, axY); ctx.stroke();
   ctx.font = `600 ${Math.round(14 * S)}px system-ui, sans-serif`;
@@ -620,29 +660,30 @@ function drawHud(ctx, t) {
   const start = new Date(d.times[0] + 'T12:00:00').getMonth();
   for (let m = 0; m < 12; m++) {
     const x = axX + (m + 0.5) / 12 * axW;
-    ctx.fillStyle = 'rgba(255,255,255,.62)';
+    ctx.fillStyle = C.muted;
     ctx.fillText(MONTHS[(start + m) % 12], x, axY - 9 * S);
   }
   const hx = axX + (t / Math.max(1, d.times.length - 1)) * axW;
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = C.primary;
   ctx.beginPath(); ctx.arc(hx, axY, 4.2 * S, 0, Math.PI * 2); ctx.fill();
 
   // The legend, and the sentence that keeps it honest.
   ctx.textAlign = 'left';
-  ctx.fillStyle = 'rgba(255,255,255,.92)';
+  ctx.fillStyle = C.primary;
   ctx.font = `650 ${Math.round(20 * S)}px system-ui, sans-serif`;
   /* The bar is a fixed number of real pixels tall, so the footer has to be
      too - scaling it with the frame tucked it under the controls on a phone. */
   const foot = Math.max(118, 150 * S);
   ctx.fillText((pale() ? 'Dark: birds reported' : 'Bright: birds reported'), pad, state.h - foot);
-  ctx.fillStyle = 'rgba(255,255,255,.62)';
+  ctx.fillStyle = C.secondary;
   ctx.font = `500 ${Math.round(16 * S)}px system-ui, sans-serif`;
   ctx.fillText('Lines: modelled movement, not tracked birds', pad, state.h - foot + 26 * S);
-  ctx.fillStyle = 'rgba(255,255,255,.34)';
+  ctx.fillStyle = C.muted;
   ctx.font = `500 ${Math.round(13 * S)}px system-ui, sans-serif`;
   ctx.fillText(`${d.species.sci} · ${d.records.toLocaleString('en-GB')} reports · `
     + 'eBird/GBIF · Natural Earth'
     + (tiles.credit ? ' · ' + tiles.credit : ''), pad, state.h - foot + 52 * S);
+  ctx.restore();
 }
 
 /* ----------------------------------------------------------------- loop */
@@ -753,6 +794,12 @@ async function boot() {
   resize();
   window.addEventListener('resize', resize);
   $('size').onchange = resize;
+  // ?basemap=satellite|light|dark|none, so a framing can be shared whole.
+  const wantMap = q.get('basemap');
+  if (wantMap && wantMap in BASEMAPS) {
+    state.basemap = wantMap;
+    $('basemap').value = wantMap;
+  }
   $('more').onclick = () => document.body.classList.toggle('more');
   $('basemap').onchange = (e) => {
     state.basemap = e.target.value;
