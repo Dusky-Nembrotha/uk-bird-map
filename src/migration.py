@@ -34,22 +34,27 @@ from .util import log, setup_logging
 DLAT, DLON = 0.9, 1.8           # grid step, degrees
 SMOOTH_PASSES = 3
 SMOOTH_RADIUS = 2
-HS_ALPHA = 0.08                 # Horn-Schunck smoothness weight
-HS_ITERS = 180
-# Horn-Schunck assumes the thing being tracked moves less than a cell or two
-# per step. A goose crossing from Iceland to the Solway covers eight cells in
-# a week, which plain HS simply cannot see - it reports nearly nothing. So the
-# flow is solved coarse-to-fine: a quarter-size grid finds the big shift, and
-# each finer level only has to correct what is left.
-HS_LEVELS = 3
+# A week-to-week change smaller than this share of the population is not a
+# migration, it is who went birding where. Arcs below it are dropped. The
+# value is the 90th percentile of observed weekly change: the distribution is
+# spread over some two hundred cells, so a single cell holds half a percent of
+# the birds and shifts by a twentieth of that in a week. Guessing a round
+# number here produced no arcs at all.
+MOVE_FLOOR = 0.0004
+# Geese cross oceans; they do not teleport. Pairings longer than this are an
+# artefact of matching a source to a sink that has nothing to do with it.
+MAX_HOP_KM = 2200
+# Weekly surfaces are averaged over this many weeks before differencing, so a
+# single quiet week does not read as a mass departure.
+TEMPORAL_SMOOTH = 3
+MAX_ARCS = 420
+# How many standard deviations of Poisson counting noise a cell's change must
+# clear before it is treated as birds moving rather than as sampling.
+Z_SIGNIFICANT = 2.0
 # A week's surface is normalised against this percentile of the whole year,
 # not against its own maximum: one roost of twenty thousand would otherwise
 # make every other week look empty.
 CLIP_PCT = 99.0
-# Below this share of the clipped maximum, a cell has too few birds for its
-# flow to mean anything, and the field is faded out rather than trusted.
-FLOW_FLOOR = 0.06
-
 
 def _grid():
     b = AREA_BBOX
@@ -157,79 +162,115 @@ def _weekly_surfaces(rows, g):
     return weeks, stack
 
 
-def _downsample(a):
-    r, c = a.shape[0] // 2 * 2, a.shape[1] // 2 * 2
-    return a[:r, :c].reshape(r // 2, 2, c // 2, 2).mean(axis=(1, 3))
+_NOISE_SCALE = {}
 
 
-def _upsample(a, shape):
-    out = np.repeat(np.repeat(a, 2, axis=0), 2, axis=1)
-    return np.pad(out[:shape[0], :shape[1]],
-                  ((0, max(0, shape[0] - out.shape[0])),
-                   (0, max(0, shape[1] - out.shape[1]))), mode="edge")
+def _noise_scale(g):
+    """How much quieter smoothing makes a Poisson field.
+
+    A smoothed cell is a weighted sum of raw counts, so its variance is the
+    kernel's sum of squared weights times the local rate - roughly a fortieth
+    of the raw variance for this kernel. Testing a smoothed surface against
+    raw Poisson noise therefore finds nothing significant anywhere, which is
+    precisely what happened. The factor is measured off the kernel rather than
+    assumed, by blurring a unit impulse and squaring what comes back.
+    """
+    key = (g["rows"], g["cols"])
+    if key not in _NOISE_SCALE:
+        imp = np.zeros(key)
+        imp[key[0] // 2, key[1] // 2] = 1.0
+        k = _blur(imp, SMOOTH_RADIUS, SMOOTH_PASSES)
+        _NOISE_SCALE[key] = float((k ** 2).sum())
+    return _NOISE_SCALE[key]
 
 
-def _warp(a, u, v):
-    """a sampled at (x+u, y+v) - what a looks like once the flow is applied."""
-    rows, cols = a.shape
-    yy, xx = np.mgrid[0:rows, 0:cols]
-    sy = np.clip(yy + v, 0, rows - 1)
-    sx = np.clip(xx + u, 0, cols - 1)
-    y0, x0 = np.floor(sy).astype(int), np.floor(sx).astype(int)
-    y1, x1 = np.minimum(y0 + 1, rows - 1), np.minimum(x0 + 1, cols - 1)
-    fy, fx = sy - y0, sx - x0
-    return ((a[y0, x0] * (1 - fx) + a[y0, x1] * fx) * (1 - fy)
-            + (a[y1, x0] * (1 - fx) + a[y1, x1] * fx) * fy)
+def _haversine(lat1, lon1, lat2, lon2):
+    import math
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = p2 - p1
+    dl = math.radians(lon2 - lon1)
+    a = (math.sin(dp / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
-def _flow(a, b, levels=HS_LEVELS):
-    """Coarse-to-fine dense flow, in cells per step."""
-    pyr_a, pyr_b = [a], [b]
-    for _ in range(levels - 1):
-        if min(pyr_a[-1].shape) < 6:
-            break
-        pyr_a.append(_downsample(pyr_a[-1]))
-        pyr_b.append(_downsample(pyr_b[-1]))
-    u = np.zeros_like(pyr_a[-1])
-    v = np.zeros_like(pyr_a[-1])
-    for lvl in range(len(pyr_a) - 1, -1, -1):
-        A, B = pyr_a[lvl], pyr_b[lvl]
-        if u.shape != A.shape:
-            u = _upsample(u, A.shape) * 2
-            v = _upsample(v, A.shape) * 2
-        du, dv = _horn_schunck(_warp(A, u, v), B)
-        u, v = u + du, v + dv
-    return u, v
+def _arcs(a, b, g):
+    """Where birds left, and where they turned up.
 
+    Optical flow was the wrong instrument. It fits a smooth, continuous
+    velocity field, which is what wind is and what a goose emphatically is
+    not: a goose sits on one field for four months and then crosses the
+    Atlantic in two days. Worse, Horn-Schunck's smoothness term manufactures
+    coherent-looking flow out of sampling noise - measured on this very
+    dataset it was two-thirds noise, drawn across open ocean, at the same
+    speed in January as in May.
 
-def _horn_schunck(a, b, alpha=HS_ALPHA, iters=HS_ITERS):
-    """Dense flow from surface a to surface b, in cells per step."""
-    Ix = (np.gradient(a, axis=1) + np.gradient(b, axis=1)) / 2
-    Iy = (np.gradient(a, axis=0) + np.gradient(b, axis=0)) / 2
-    It = b - a
-    u = np.zeros_like(a)
-    v = np.zeros_like(a)
-    kernel = np.array([[1 / 12, 1 / 6, 1 / 12],
-                       [1 / 6, 0, 1 / 6],
-                       [1 / 12, 1 / 6, 1 / 12]])
-    for _ in range(iters):
-        ub = _convolve3(u, kernel)
-        vb = _convolve3(v, kernel)
-        d = alpha ** 2 + Ix ** 2 + Iy ** 2
-        common = (Ix * ub + Iy * vb + It) / d
-        u = ub - Ix * common
-        v = vb - Iy * common
-    return u, v
+    So this asks a question the data can actually answer. Normalise each week
+    so it describes a distribution rather than an amount of birdwatching,
+    difference consecutive weeks, and match the cells that lost share to the
+    cells that gained it, nearest first. The result is a list of journeys,
+    which is the shape migration actually has - and when nothing moves, as in
+    midwinter, there is nothing to match and the map goes still.
+    """
+    sa = a.sum() or 1.0
+    sb = b.sum() or 1.0
+    if sa < 1 or sb < 1:
+        return []
+    # Compared at equal effort: b is scaled to a's total, so what is left is a
+    # change in where the birds are rather than in how many people were out.
+    bs = b * (sa / sb)
+    delta = bs - a
 
+    # Counts are Poisson, so the noise in a cell's week-to-week difference is
+    # about sqrt(a + b) - and in July, when a whole week is fifty records, that
+    # swamps anything real. Testing each cell against its own noise is what
+    # stops a summer of breeding geese reading as a mass flight south: the
+    # earlier flat threshold could not tell a quiet week from a departure.
+    sd = np.sqrt(np.maximum(a + bs, 1e-9) * _noise_scale(g))
+    significant = np.abs(delta) > Z_SIGNIFICANT * sd
+    delta = np.where(significant, delta, 0.0) / sa
 
-def _convolve3(a, k):
-    p = np.pad(a, 1, mode="edge")
-    out = np.zeros_like(a)
-    for dy in range(3):
-        for dx in range(3):
-            if k[dy, dx]:
-                out += k[dy, dx] * p[dy:dy + a.shape[0], dx:dx + a.shape[1]]
-    return out
+    src, dst = [], []
+    for r in range(g["rows"]):
+        for c in range(g["cols"]):
+            d = delta[r, c]
+            if d < -MOVE_FLOOR:
+                src.append([-d, r, c])
+            elif d > MOVE_FLOOR:
+                dst.append([d, r, c])
+    if not src or not dst:
+        return []
+
+    lat_of = lambda r: g["lat0"] + r * g["dlat"]
+    lon_of = lambda c: g["lon0"] + c * g["dlon"]
+    src.sort(reverse=True)
+    out = []
+    for smass, sr, sc in src:
+        slat, slon = lat_of(sr), lon_of(sc)
+        # Nearest sinks first: a bird leaving the Ouse Washes is far likelier
+        # to have gone to the Wash than to Iceland.
+        order = sorted(range(len(dst)), key=lambda i: _haversine(
+            slat, slon, lat_of(dst[i][1]), lon_of(dst[i][2])))
+        for i in order:
+            if smass <= 1e-9:
+                break
+            dmass, dr, dc = dst[i]
+            if dmass <= 1e-9:
+                continue
+            dlat, dlon = lat_of(dr), lon_of(dc)
+            km = _haversine(slat, slon, dlat, dlon)
+            if km > MAX_HOP_KM:
+                continue
+            move = min(smass, dmass)
+            smass -= move
+            dst[i][0] -= move
+            if move > MOVE_FLOOR * 0.5:
+                out.append([round(slat, 2), round(slon, 2),
+                            round(dlat, 2), round(dlon, 2),
+                            round(float(move), 5), round(km)])
+    out.sort(key=lambda a_: -a_[4])
+    return out[:MAX_ARCS]
 
 
 def build(species, out_path=None, start=None, end=None):
@@ -244,29 +285,26 @@ def build(species, out_path=None, start=None, end=None):
     cap = np.percentile(stack[stack > 0], CLIP_PCT) if (stack > 0).any() else 1.0
     norm = np.clip(stack / (cap or 1.0), 0, 1)
 
-    us, vs, ns = [], [], []
-    # Flow is solved on surfaces normalised week by week. What matters for
-    # movement is where the birds are, not how many were reported that week;
-    # leaving the raw counts in meant a quiet week had a flat surface, no
-    # gradient, and so no flow at all.
-    shape = stack / np.maximum(stack.max(axis=(1, 2), keepdims=True), 1e-9)
+    # Differenced on temporally smoothed surfaces. Week to week, raw counts
+    # swing on who happened to go out; a three-week mean is the shortest
+    # window in which a change is more likely to be birds than weather.
+    k = TEMPORAL_SMOOTH
+    smooth = np.stack([stack[max(0, w - k // 2):w + k // 2 + 1].mean(axis=0)
+                       for w in range(len(weeks))])
+
+    arcs, ns = [], []
     for w in range(len(weeks)):
-        a = shape[w]
-        b = shape[min(len(weeks) - 1, w + 1)]
-        u, v = _flow(a, b)
-        # Flow only where there are birds to carry it. Over empty ground the
-        # optical flow is fitting noise between two near-zero surfaces, and it
-        # shows: in high summer, with the geese in Iceland and the map that
-        # should be still, every cell had an opinion about where they were
-        # going. Fading the field out with abundance is also what the
-        # reference does - its streaks disappear entirely in June.
-        gate = np.clip(norm[w] / FLOW_FLOOR, 0, 1)
-        u *= gate
-        v *= gate
-        # cells/week -> degrees/day, which is a quantity with a meaning
-        us.append(np.round(u * g["dlon"] / 7.0, 4).ravel().tolist())
-        vs.append(np.round(v * g["dlat"] / 7.0, 4).ravel().tolist())
+        nxt = min(len(weeks) - 1, w + 1)
+        arcs.append(_arcs(smooth[w], smooth[nxt], g))
         ns.append(np.round(norm[w], 4).ravel().tolist())
+
+    moved = [sum(a[4] for a in wk) for wk in arcs]
+    log.info("arcs per week: median %d, busiest %d (%s)",
+             int(np.median([len(a) for a in arcs])),
+             max(len(a) for a in arcs),
+             weeks[int(np.argmax([len(a) for a in arcs]))].isoformat())
+    log.info("share of the population on the move: quietest %.3f, busiest %.3f",
+             min(moved), max(moved))
 
     sci = rows[0][4] or species
     common = _english_name(sci) or species
@@ -275,23 +313,24 @@ def build(species, out_path=None, start=None, end=None):
         "records": len(rows),
         "grid": g,
         "times": [w.isoformat() for w in weeks],
-        "u": us, "v": vs, "n": ns,
+        "n": ns,
+        "arcs": arcs,
         "points": points,
         "units": {"points": "observed report positions, [lat,lon,...] per week",
-                  "u": "degrees longitude per day", "v": "degrees latitude per day",
+                  "arcs": "[fromLat, fromLon, toLat, toLon, share, km] per week",
                   "n": "reports per cell, smoothed, clipped at the "
                        f"{CLIP_PCT:g}th percentile of the year"},
-        "method": "Horn-Schunck optical flow between consecutive weekly "
-                  "abundance surfaces. Modelled population shift, not tracked "
-                  "birds, and abundance carries observer effort with it.",
+        "method": "Each week normalised to a distribution, differenced against "
+                  "the next, and the cells that lost share matched nearest-first "
+                  "to the cells that gained it. Arcs are inferred journeys "
+                  "between places, not tracked birds; abundance is reports, so "
+                  "it carries observer effort with it.",
         "generated": date.today().isoformat(),
     }
     out = out_path or (WEB_DATA / "migration.json")
     WEB_DATA.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, separators=(",", ":")))
-    speed = np.hypot(np.array(us[-10]), np.array(vs[-10]))
-    log.info("wrote %s (%.1f MB), typical speed %.3f deg/day, peak %.3f",
-             out, out.stat().st_size / 1e6, float(np.median(speed)), float(speed.max()))
+    log.info("wrote %s (%.1f MB)", out, out.stat().st_size / 1e6)
     return out
 
 

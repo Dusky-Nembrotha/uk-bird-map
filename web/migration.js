@@ -17,13 +17,18 @@ const state = {
   t: 0,                 // week, fractional
   playing: true,
   weeks: 0,
-  particles: [],
   w: 0, h: 0, dpr: 1,
 };
 
 /* The view. Britain, Iceland and the Norwegian Sea - the triangle this
    species actually uses - rather than the whole European export. */
-const VIEW = { west: -25, east: 5, south: 49, north: 68 };
+/* Wide enough for both flyways. Pink-footed Geese are two populations, not
+   one: Iceland and Greenland birds winter in Britain, while Svalbard birds
+   winter in Denmark and the Netherlands and go north up the Norwegian coast.
+   A frame cut at 5E showed the second lot piling up against the edge like
+   moths on a window - 98% of the spring journeys ended east of 4E, and the
+   map was hiding the clearest signal in the data. */
+const VIEW = { west: -25, east: 22, south: 49, north: 70 };
 
 /* How long a year takes on screen. Everything else derives from it: the week
    the clip is on, and - crucially - how far a particle moves per frame. The
@@ -134,73 +139,80 @@ function drawReports(ctx, t) {
 
 const TRAIL = 14;          // positions kept per particle
 
-function seed(n) {
-  state.particles = [];
-  for (let i = 0; i < n; i++) {
-    const x = Math.random() * state.w, y = Math.random() * state.h;
-    state.particles.push({ x, y, trail: [x, y],
-                           age: Math.random() * 70, life: 40 + Math.random() * 60 });
-  }
+/* The journeys.
+
+   This replaces a dense velocity field, which was the wrong instrument and
+   looked it: particles released into a smooth field drift about like weather,
+   wander out over open ocean, and keep moving in midwinter when the birds are
+   standing in a Norfolk field. A goose does not diffuse. It sits still for
+   months and then flies a long way to somewhere specific.
+
+   So nothing moves except along an inferred journey - from a place that lost
+   birds to a place that gained them - and in the thirty-four weeks of the year
+   where no movement clears the noise, nothing moves at all. */
+
+const COMET = 0.085;        // trail length, as a fraction of the journey
+const SPEED = 0.26;         // journeys per second
+
+function arcPath(a) {
+  const x0 = px(a[1]), y0 = py(a[0]), x1 = px(a[3]), y1 = py(a[2]);
+  // Bowed a little, so two journeys between the same pair of places do not
+  // land on top of each other and the line reads as a flight rather than a
+  // ruled connector.
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  const dx = x1 - x0, dy = y1 - y0;
+  const len = Math.hypot(dx, dy) || 1;
+  const cx = mx - dy / len * len * 0.11;
+  const cy = my + dx / len * len * 0.11;
+  return { x0, y0, x1, y1, cx, cy, len };
 }
 
-function respawn(p) {
-  /* Dropped back where the birds are, not uniformly. A particle seeded in the
-     middle of the Atlantic spends its whole life in still air and contributes
-     nothing but a dead pixel. */
-  for (let tries = 0; tries < 24; tries++) {
-    const x = Math.random() * state.w, y = Math.random() * state.h;
-    if (sample('n', latAt(y), lonAt(x), state.t) > 0.05 + Math.random() * 0.25) {
-      p.x = x; p.y = y; p.age = 0; p.life = 40 + Math.random() * 60;
-      p.trail = [x, y];
-      return;
-    }
-  }
-  p.x = Math.random() * state.w; p.y = Math.random() * state.h;
-  p.age = 0; p.life = 40 + Math.random() * 60;
-  p.trail = [p.x, p.y];
-}
+const at = (q, t) => {
+  const m = 1 - t;
+  return [m * m * q.x0 + 2 * m * t * q.cx + t * t * q.x1,
+          m * m * q.y0 + 2 * m * t * q.cy + t * t * q.y1];
+};
 
-function drawFlow(ctx, dt) {
-  // Degrees per day -> pixels per frame, at the clip's own rate.
-  const degPerPxLon = (VIEW.east - VIEW.west) / state.w;
+function drawJourneys(ctx, now) {
+  const d = state.d;
+  const i = Math.max(0, Math.min(d.arcs.length - 1, Math.floor(state.t)));
+  const j = Math.min(d.arcs.length - 1, i + 1);
+  const f = state.t - i;
+
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   ctx.lineCap = 'round';
-  for (const p of state.particles) {
-    const lat = latAt(p.y), lon = lonAt(p.x);
-    const u = sample('u', lat, lon, state.t);
-    const v = sample('v', lat, lon, state.t);
-    const sp = Math.hypot(u, v);
-    const n = sample('n', lat, lon, state.t);
-    if (sp < 0.02 || n < 0.03) { p.age += dt * 3; if (p.age > p.life) respawn(p); continue; }
 
-    // Degrees per day, moved for one frame's worth of days.
-    const k = dt * daysPerFrame() / degPerPxLon;
-    p.x += u * k;
-    p.y -= v * k * (Math.cos(lat * Math.PI / 180) || 1);   // screen y grows down
-    p.age += dt;
+  const fly = (list, fade) => {
+    if (fade <= 0.02) return;
+    const biggest = list.reduce((m, a) => Math.max(m, a[4]), 1e-9);
+    list.forEach((a, k) => {
+      const q = arcPath(a);
+      if (q.len < 2) return;
+      const weight = a[4] / biggest;
+      // More of the population moving means more birds in the air, not a
+      // brighter smear: the count carries the quantity.
+      const n = 1 + Math.round(weight * 5);
+      for (let b = 0; b < n; b++) {
+        const phase = (now * SPEED + k * 0.37 + b / n) % 1;
+        const head = at(q, phase);
+        const alpha = fade * (0.25 + 0.6 * weight)
+          * Math.min(1, phase / 0.08) * Math.min(1, (1 - phase) / 0.12);
+        for (let seg = 0; seg < 5; seg++) {
+          const t1 = phase - (seg / 5) * COMET;
+          const t2 = phase - ((seg + 1) / 5) * COMET;
+          if (t2 < 0) break;
+          const p1 = seg === 0 ? head : at(q, t1), p2 = at(q, t2);
+          ctx.strokeStyle = `rgba(226, 240, 255, ${alpha * (1 - seg / 5)})`;
+          ctx.lineWidth = 1.6 - seg * 0.22;
+          ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
+        }
+      }
+    });
+  };
 
-    /* The trail is the mark, not the step. One segment per frame drew a
-       four-pixel dash; keeping the last few positions and stroking them as a
-       tapering polyline is what makes it read as something flying. */
-    p.trail.push(p.x, p.y);
-    if (p.trail.length > TRAIL * 2) p.trail.splice(0, 2);
-
-    const a = Math.min(1, p.age / 8) * Math.max(0, 1 - p.age / p.life);
-    const bright = 0.62 * a * Math.min(1, n * 2.4);
-    for (let i = 2; i < p.trail.length; i += 2) {
-      const f = i / (p.trail.length - 2);
-      ctx.strokeStyle = `rgba(226, 240, 255, ${bright * f * f})`;
-      ctx.lineWidth = 0.5 + 1.1 * f;
-      ctx.beginPath();
-      ctx.moveTo(p.trail[i - 2], p.trail[i - 1]);
-      ctx.lineTo(p.trail[i], p.trail[i + 1]);
-      ctx.stroke();
-    }
-
-    if (p.age > p.life || p.x < -10 || p.y < -10
-        || p.x > state.w + 10 || p.y > state.h + 10) respawn(p);
-  }
+  fly(d.arcs[i], 1 - f);
+  fly(d.arcs[j], f);
   ctx.restore();
 }
 
@@ -273,7 +285,7 @@ function frame(now) {
 
   drawLand(ctx);
   drawReports(ctx, state.t);
-  drawFlow(ctx, dt);
+  drawJourneys(ctx, now / 1000);
   drawHud(ctx, state.t);
 
   if (state.playing) {
@@ -301,7 +313,6 @@ function resize() {
   state.ctx = c.getContext('2d');
   state.ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
   setProjection(w, h);
-  seed(1400);
 }
 
 async function boot() {
@@ -318,8 +329,8 @@ async function boot() {
   $('scrub').max = state.weeks - 1;
   $('loading').hidden = true;
   $('bar').hidden = false;
-  // ?week=N holds the clip at one week (the particles still fly, so a still
-  // frame has its streaks); ?play=0 pauses wherever it starts.
+  // ?week=N holds the clip at one week (the journeys still animate, so a
+  // still frame has its comets); ?play=0 pauses wherever it starts.
   const q = new URLSearchParams(location.search);
   if (q.has('week')) {
     state.t = Math.max(0, Math.min(state.weeks - 1, Number(q.get('week'))));

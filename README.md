@@ -331,11 +331,25 @@ Dataset on GBIF is the historical record, and our live eBird adapter has only
 ever seen the last fortnight.
 
 `src/migration.py` bins the records by week onto a coarse grid, smooths each
-week into an abundance surface, and recovers movement between consecutive
-weeks by coarse-to-fine Horn–Schunck optical flow. Output is
-`web/data/migration.json` in the same shape as the weather grid — a lat/lon
-field of `u`/`v` in degrees per day, plus weekly abundance and the observed
-report positions.
+week into an abundance surface, and then asks where birds **left** and where
+they **arrived**: each week is normalised to a distribution, differenced
+against the next, and the cells that lost share are matched nearest-first to
+the cells that gained it. The output is a list of journeys.
+
+**It used to use optical flow, and that was wrong.** A dense velocity field is
+what wind is, and a goose is not wind — it sits on one field for four months
+and then crosses the North Sea in a night. Worse, Horn–Schunck's smoothness
+term manufactures coherent-looking flow out of sampling noise. Measured on
+this dataset it was two-thirds noise: directional coherence over ±3 weeks was
+0.34, 40–47% of the drawn area was more than 150 km from any report that week,
+and the speed in January (0.73°/day) was indistinguishable from May (1.42).
+It looked like weather because it was behaving like weather.
+
+Each cell's weekly change is now tested against Poisson counting noise, scaled
+for the variance that smoothing removes (measured off the kernel, not assumed).
+Below two standard deviations, nothing is drawn. **Thirty-four of the
+fifty-three weeks are completely still** — which is correct: in midwinter and
+high summer these birds are not going anywhere.
 
 **Choose the window deliberately.** GBIF republishes eBird in batches, so the
 last several months of any download are a fraction of what they will hold:
@@ -343,18 +357,23 @@ October 2026 arrived with 1,242 Pink-footed Goose records against 6,948 for
 October 2025. A year running up to today ends in a fade that is an artefact of
 publishing, not of birds.
 
-### What it is and is not
+### What it shows, and what it misses
 
-The flow is the direction the *centre of the population* must have shifted for
-one week's distribution to become the next. That is a real quantity about a
-species and emphatically not a flight path. Abundance is reports, not birds,
-so it carries observer effort with it — Britain looks busier than Iceland
-partly because more people are looking.
+The arcs are inferred journeys between places, not flight paths, and certainly
+not tracked birds. Abundance is reports, so it carries observer effort with it.
 
-It validates against what the species actually does. Weighted by where the
-birds are, flow runs south in autumn (−0.09°/day, October −0.22), north in
-spring (+0.29, May +0.41) and is still in summer; the population centroid sits
-at 54.4°N in Britain in December and 61.7°N in Iceland in June.
+It finds the **spring departure** clearly: February and March carry 50+
+journeys a week running +790 and +830 km north. Most of those belong to the
+**Svalbard population**, which winters in Denmark and the Netherlands and goes
+north up the Norwegian coast — 98% of spring journeys end east of 4°E. An
+earlier frame cropped at 5°E hid the clearest signal in the data.
+
+It largely **misses the autumn arrival into Britain**, and this is a limit of
+the data rather than of the method. Britain's share of reports is already 78%
+in early September, before the geese get there, because UK birders dominate
+the record whatever the geese are doing. The Icelandic end falls from 123
+reports a week to 22 — real, but too sparse to clear the noise test. Loosening
+the test to catch it also invents movement in June and July, so it stays shut.
 
 ---
 
