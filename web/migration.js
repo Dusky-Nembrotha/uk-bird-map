@@ -18,6 +18,7 @@ const state = {
   playing: true,
   weeks: 0,
   w: 0, h: 0, dpr: 1,
+  basemap: 'satellite',
 };
 
 /* The view. Britain, Iceland and the Norwegian Sea - the triangle this
@@ -107,29 +108,74 @@ function wireZoom(canvas) {
     const [x, y] = toCanvas(e);
     zoomAt(x, y, Math.exp(-e.deltaY * 0.0015));
     updateZoomUi();
+    queueTiles();
   }, { passive: false });
 
-  let drag = null;
+  /* Pointer events cover mouse and touch together, so one finger pans and two
+     pinch. The canvas carries touch-action: none, without which the browser
+     takes the gesture for scrolling and the map never sees it - which is why
+     this would not move on a phone. */
+  const live = new Map();
+  let drag = null, pinch = null;
+
+  const centre = () => {
+    const pts = [...live.values()];
+    return [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2];
+  };
+  const spread = () => {
+    const pts = [...live.values()];
+    return Math.hypot(pts[0][0] - pts[1][0], pts[0][1] - pts[1][1]) || 1;
+  };
+
   canvas.addEventListener('pointerdown', (e) => {
-    drag = { ...toCanvas(e), tx: view.tx, ty: view.ty };
-    drag.x = toCanvas(e)[0]; drag.y = toCanvas(e)[1];
     canvas.setPointerCapture(e.pointerId);
-    canvas.style.cursor = 'grabbing';
+    live.set(e.pointerId, toCanvas(e));
+    if (live.size === 2) {
+      drag = null;
+      pinch = { d: spread(), k: view.k, c: centre(), tx: view.tx, ty: view.ty };
+    } else if (live.size === 1) {
+      const [x, y] = toCanvas(e);
+      drag = { x, y, tx: view.tx, ty: view.ty };
+      canvas.style.cursor = 'grabbing';
+    }
   });
+
   canvas.addEventListener('pointermove', (e) => {
-    if (!drag) return;
-    const [x, y] = toCanvas(e);
-    view.tx = drag.tx + (x - drag.x);
-    view.ty = drag.ty + (y - drag.y);
-    clampPan();
+    if (!live.has(e.pointerId)) return;
+    live.set(e.pointerId, toCanvas(e));
+    if (pinch && live.size === 2) {
+      const f = spread() / pinch.d;
+      view.k = Math.max(1, Math.min(40, pinch.k * f));
+      const g = view.k / pinch.k;
+      const [cx, cy] = pinch.c;
+      view.tx = cx - (cx - pinch.tx) * g;
+      view.ty = cy - (cy - pinch.ty) * g;
+      clampPan();
+      updateZoomUi();
+    } else if (drag) {
+      const [x, y] = toCanvas(e);
+      view.tx = drag.tx + (x - drag.x);
+      view.ty = drag.ty + (y - drag.y);
+      clampPan();
+    }
   });
-  const end = () => { drag = null; canvas.style.cursor = view.k > 1 ? 'grab' : 'default'; };
+
+  const end = (e) => {
+    live.delete(e.pointerId);
+    if (live.size < 2) pinch = null;
+    if (live.size === 0) {
+      drag = null;
+      canvas.style.cursor = view.k > 1 ? 'grab' : 'default';
+      queueTiles();
+    }
+  };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
   canvas.addEventListener('dblclick', (e) => {
     const [x, y] = toCanvas(e);
     zoomAt(x, y, e.shiftKey ? 1 / 1.8 : 1.8);
     updateZoomUi();
+    queueTiles();
   });
 }
 
@@ -139,6 +185,92 @@ function updateZoomUi() {
   const r = $('reset');
   if (r) r.hidden = view.k <= 1.02;
   $('c').style.cursor = view.k > 1 ? 'grab' : 'default';
+}
+
+/* ------------------------------------------------------------ the ground
+
+   Real imagery, the same Esri satellite layer the animation view uses, drawn
+   into an offscreen canvas for the current projection. Tiles arrive over the
+   network, so while they are in flight the pixels we already have are shifted
+   and scaled to the view we are now looking at - the ground tracks the
+   gesture, slightly soft, and the sharp ones drop into the same place. */
+
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
+const BASEMAPS = {
+  satellite: { url: `${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
+               credit: 'Esri, Maxar, Earthstar Geographics', max: 17, dim: 0.42 },
+  dark: { url: `${ESRI}/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
+          credit: 'Esri, HERE, Garmin, OpenStreetMap', max: 16, dim: 0.9 },
+  none: null,
+};
+
+const tiles = { canvas: null, view: null, credit: '', dim: 1, token: 0 };
+let tileTimer = null;
+
+function queueTiles() {
+  clearTimeout(tileTimer);
+  // Only once the map has settled: a tile request per frame of a drag would
+  // be rude to Esri and useless to us.
+  tileTimer = setTimeout(loadTiles, 180);
+}
+
+async function loadTiles() {
+  const spec = BASEMAPS[state.basemap];
+  if (!spec) { tiles.canvas = null; return; }
+  const mine = ++tiles.token;
+  const W = state.w, H = state.h;
+
+  // The zoom whose native pixel scale is closest to what we are drawing at.
+  const degPerPx = (lonAt(W) - lonAt(0)) / W;
+  const worldPx = 360 / degPerPx;
+  const z = Math.max(2, Math.min(spec.max, Math.round(Math.log2(worldPx / 256))));
+  const n = Math.pow(2, z);
+
+  const lonOf = (x) => (x / n) * 360 - 180;
+  const latOf = (y) => {
+    const t = Math.PI - (2 * Math.PI * y) / n;
+    return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(t) - Math.exp(-t)));
+  };
+  const xOf = (lon) => ((lon + 180) / 360) * n;
+  const yOf = (lat) => {
+    const r = lat * Math.PI / 180;
+    return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n;
+  };
+
+  const west = lonAt(0), east = lonAt(W), north = latAt(0), south = latAt(H);
+  const x0 = Math.max(0, Math.floor(xOf(west)) - 1);
+  const x1 = Math.min(n - 1, Math.ceil(xOf(east)));
+  const y0 = Math.max(0, Math.floor(yOf(north)) - 1);
+  const y1 = Math.min(n - 1, Math.ceil(yOf(south)));
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 400) return;   // never hammer the server
+
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  const jobs = [];
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      jobs.push(new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          const left = px(lonOf(x)), right = px(lonOf(x + 1));
+          const top = py(latOf(y)), bottom = py(latOf(y + 1));
+          // +1px or hairline seams show between neighbouring tiles.
+          g.drawImage(img, left, top, right - left + 1, bottom - top + 1);
+          resolve();
+        };
+        img.onerror = () => resolve();
+        img.src = spec.url.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+      }));
+    }
+  }
+  await Promise.all(jobs);
+  if (mine !== tiles.token) return;        // a later view already asked
+  tiles.canvas = c;
+  tiles.credit = spec.credit;
+  tiles.dim = spec.dim;
+  tiles.view = { k: view.k, tx: view.tx, ty: view.ty, w: W, h: H };
 }
 
 /* ------------------------------------------------------------ the field */
@@ -175,15 +307,41 @@ function drawLand(ctx) {
     });
     ctx.closePath();
   };
-  ctx.fillStyle = '#0a0d11';
+
+  ctx.fillStyle = '#05070c';
   ctx.fillRect(0, 0, state.w, state.h);
-  ctx.fillStyle = '#1b2026';
-  for (const r of state.geo.land) if (near(r)) { ring(r); ctx.fill(); }
-  ctx.fillStyle = '#0a0d11';
-  for (const r of state.geo.lakes) if (near(r)) { ring(r); ctx.fill(); }
-  ctx.strokeStyle = 'rgba(190, 205, 220, .20)';
-  // Constant on screen whatever the zoom: a coastline is a hairline, not a
-  // feature with a width.
+
+  if (tiles.canvas) {
+    ctx.save();
+    ctx.globalAlpha = tiles.dim;
+    const tv = tiles.view;
+    if (tv && (tv.k !== view.k || tv.tx !== view.tx || tv.ty !== view.ty)) {
+      // Shift and scale what we have onto where we are now looking, so the
+      // ground moves with the gesture instead of sticking and then jumping.
+      const f = view.k / tv.k;
+      ctx.translate(view.tx - tv.tx * f, view.ty - tv.ty * f);
+      ctx.scale(f, f);
+    }
+    ctx.drawImage(tiles.canvas, 0, 0, state.w, state.h);
+    ctx.restore();
+    // Dimming the tiles alone leaves a pale sea with plenty of contrast of
+    // its own; the wash pushes the whole ground back so the birds are the
+    // brightest thing on the frame, which is the entire point of it.
+    ctx.fillStyle = 'rgba(5, 8, 14, .34)';
+    ctx.fillRect(0, 0, state.w, state.h);
+  } else {
+    // Until the imagery lands - or with it turned off - the drawn world.
+    ctx.fillStyle = '#1b2026';
+    for (const r of state.geo.land) if (near(r)) { ring(r); ctx.fill(); }
+    ctx.fillStyle = '#0a0d11';
+    for (const r of state.geo.lakes) if (near(r)) { ring(r); ctx.fill(); }
+  }
+
+  /* A coastline over the top either way. On imagery it is what keeps the
+     country readable once the land has been dimmed far enough for white
+     marks to carry. */
+  ctx.strokeStyle = tiles.canvas ? 'rgba(170, 200, 230, .30)'
+                                 : 'rgba(190, 205, 220, .20)';
   ctx.lineWidth = 0.8; ctx.lineJoin = 'round';
   for (const r of state.geo.land) if (near(r)) { ring(r); ctx.stroke(); }
 }
@@ -268,6 +426,10 @@ function drawJourneys(ctx, now) {
     list.forEach((a, k) => {
       const q = arcPath(a);
       if (q.len < 2) return;
+      /* The trail is a fraction of the journey, which at six times zoom makes
+         a journey six times longer on screen and the comets into rain. Bound
+         it in pixels as well, so a bird stays a bird however far in you go. */
+      const comet = Math.min(COMET, 70 / q.len);
       const weight = a[4] / biggest;
       // More of the population moving means more birds in the air, not a
       // brighter smear: the count carries the quantity.
@@ -278,8 +440,8 @@ function drawJourneys(ctx, now) {
         const alpha = fade * (0.25 + 0.6 * weight)
           * Math.min(1, phase / 0.08) * Math.min(1, (1 - phase) / 0.12);
         for (let seg = 0; seg < 5; seg++) {
-          const t1 = phase - (seg / 5) * COMET;
-          const t2 = phase - ((seg + 1) / 5) * COMET;
+          const t1 = phase - (seg / 5) * comet;
+          const t2 = phase - ((seg + 1) / 5) * comet;
           if (t2 < 0) break;
           const p1 = seg === 0 ? head : at(q, t1), p2 = at(q, t2);
           ctx.strokeStyle = `rgba(226, 240, 255, ${alpha * (1 - seg / 5)})`;
@@ -355,14 +517,25 @@ function drawHud(ctx, t) {
   const d = state.d, W = state.w;
   const i = Math.max(0, Math.min(d.times.length - 1, Math.round(t)));
   const when = new Date(d.times[i] + 'T12:00:00');
-  const S = state.h / 1920;                     // everything scales with the frame
+  /* Scaled off whichever dimension is smaller. Taking it from the height
+     alone was fine for a 4:5 export and threw the title clean off both edges
+     of a phone held upright. */
+  const S = Math.min(state.h / 1920, W / 1080);
   const pad = 54 * S;
 
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffffff';
-  ctx.font = `800 ${Math.round(86 * S)}px system-ui, -apple-system, sans-serif`;
+  // And then made to fit outright, because "YELLOW-BROWED WARBLER" is twice
+  // the length of "BRENT GOOSE" and no single scale suits both.
+  const title = d.species.common.toUpperCase();
+  let size = 86 * S;
   ctx.letterSpacing = `${2 * S}px`;
-  ctx.fillText(d.species.common.toUpperCase(), W / 2, 150 * S);
+  do {
+    ctx.font = `800 ${Math.round(size)}px system-ui, -apple-system, sans-serif`;
+    if (ctx.measureText(title).width <= W - pad * 2) break;
+    size -= 2;
+  } while (size > 12);
+  ctx.fillText(title, W / 2, 150 * S);
   ctx.letterSpacing = '0px';
 
   ctx.fillStyle = 'rgba(255,255,255,.72)';
@@ -376,7 +549,7 @@ function drawHud(ctx, t) {
     { day: 'numeric', month: 'short' }).toUpperCase(), W - pad, 252 * S);
 
   // The month axis, with the playhead on it.
-  const axW = 330 * S, axX = W - pad - axW, axY = 288 * S;
+  const axW = Math.min(330 * S, W * 0.46), axX = W - pad - axW, axY = 288 * S;
   ctx.strokeStyle = 'rgba(255,255,255,.34)';
   ctx.lineWidth = 1.2 * S;
   ctx.beginPath(); ctx.moveTo(axX, axY); ctx.lineTo(axX + axW, axY); ctx.stroke();
@@ -396,14 +569,18 @@ function drawHud(ctx, t) {
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,.92)';
   ctx.font = `650 ${Math.round(20 * S)}px system-ui, sans-serif`;
-  ctx.fillText('Bright: birds reported', pad, state.h - 112 * S);
+  /* The bar is a fixed number of real pixels tall, so the footer has to be
+     too - scaling it with the frame tucked it under the controls on a phone. */
+  const foot = Math.max(118, 150 * S);
+  ctx.fillText('Bright: birds reported', pad, state.h - foot);
   ctx.fillStyle = 'rgba(255,255,255,.62)';
   ctx.font = `500 ${Math.round(16 * S)}px system-ui, sans-serif`;
-  ctx.fillText('Lines: modelled movement, not tracked birds', pad, state.h - 86 * S);
+  ctx.fillText('Lines: modelled movement, not tracked birds', pad, state.h - foot + 26 * S);
   ctx.fillStyle = 'rgba(255,255,255,.34)';
   ctx.font = `500 ${Math.round(13 * S)}px system-ui, sans-serif`;
   ctx.fillText(`${d.species.sci} · ${d.records.toLocaleString('en-GB')} reports · `
-    + 'eBird/GBIF · Natural Earth', pad, state.h - 58 * S);
+    + 'eBird/GBIF · Natural Earth'
+    + (tiles.credit ? ' · ' + tiles.credit : ''), pad, state.h - foot + 52 * S);
 }
 
 /* ----------------------------------------------------------------- loop */
@@ -431,20 +608,32 @@ function frame(now) {
 }
 
 function resize() {
-  const [w, h] = $('size').value.split('x').map(Number);
-  // Fit both ways. Scaling by height alone let a 4:5 frame run off the side
-  // of a narrow window, taking the title with it.
-  const scale = Math.min((window.innerHeight - 96) / h,
-                         (window.innerWidth - 40) / w, 1);
+  const pick = $('size').value;
+  let w, h;
+  if (pick === 'fit') {
+    // The viewer's normal state: the map is the page. A fixed export shape is
+    // for when you are making a clip, not for looking at one on a phone.
+    w = Math.round(window.innerWidth);
+    h = Math.round(window.innerHeight);
+  } else {
+    [w, h] = pick.split('x').map(Number);
+  }
+  document.body.classList.toggle('fit', pick === 'fit');
+
+  const scale = pick === 'fit' ? 1
+    : Math.min((window.innerHeight - 96) / h, (window.innerWidth - 40) / w, 1);
   const c = $('c');
   state.dpr = Math.min(2, window.devicePixelRatio || 1);
   state.w = w; state.h = h;
-  c.width = w * state.dpr; c.height = h * state.dpr;
+  c.width = Math.round(w * state.dpr);
+  c.height = Math.round(h * state.dpr);
   c.style.width = Math.round(w * scale) + 'px';
   c.style.height = Math.round(h * scale) + 'px';
   state.ctx = c.getContext('2d');
   state.ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
   setProjection(w, h);
+  clampPan();
+  queueTiles();
 }
 
 async function loadSpecies(slug) {
@@ -501,6 +690,13 @@ async function boot() {
   resize();
   window.addEventListener('resize', resize);
   $('size').onchange = resize;
+  $('more').onclick = () => document.body.classList.toggle('more');
+  $('basemap').onchange = (e) => {
+    state.basemap = e.target.value;
+    tiles.canvas = null;
+    tiles.credit = '';
+    loadTiles();
+  };
   wireZoom($('c'));
   /* ?zoom=4&at=57.5,-3 frames a corner of the map, which is how you share
      "look at the Moray Firth" rather than describing it. */
