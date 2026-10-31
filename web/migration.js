@@ -19,6 +19,7 @@ const state = {
   weeks: 0,
   w: 0, h: 0, dpr: 1,
   basemap: 'satellite',
+  clock: 0,          // seconds of playback, not of wall time
 };
 
 /* The view. Britain, Iceland and the Norwegian Sea - the triangle this
@@ -805,11 +806,17 @@ function frame(now) {
 
   drawLand(ctx);
   drawReports(ctx, state.t);
-  drawJourneys(ctx, now / 1000);
+  drawJourneys(ctx, state.clock);
   drawHotspots(ctx);
   drawHud(ctx, state.t);
 
   if (state.playing) {
+    /* The comets ran off the wall clock, so they kept flying while the clip
+       was paused - a still frame that would not hold still. They now run off
+       a clock that only advances while it is playing, which is what pause is
+       supposed to mean. A paused frame still shows its trails, because the
+       phase they are frozen at is spread across each journey. */
+    state.clock += dt / 60;
     // A year in about forty seconds.
     state.t += dt * (state.weeks / (YEAR_SECONDS * 60));
     if (state.t >= state.weeks - 1) state.t = 0;
