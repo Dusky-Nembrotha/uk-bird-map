@@ -18,7 +18,7 @@ const state = {
   playing: true,
   weeks: 0,
   w: 0, h: 0, dpr: 1,
-  basemap: 'light',
+  basemap: 'satellite',
 };
 
 /* The view. Britain, Iceland and the Norwegian Sea - the triangle this
@@ -198,7 +198,11 @@ function updateZoomUi() {
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
 const BASEMAPS = {
   satellite: { url: `${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
-               credit: 'Esri, Maxar, Earthstar Geographics', max: 17, dim: 0.42 },
+               /* The animation view draws this imagery at 0.9 and it looks
+                  like somewhere. At 0.42, with a heavy wash over the top, this
+                  page had turned it to mud - the whole reason it stopped
+                  resembling the rest of the app. */
+               credit: 'Esri, Maxar, Earthstar Geographics', max: 17, dim: 0.9 },
   light: { url: `${ESRI}/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
            credit: 'Esri, HERE, Garmin, OpenStreetMap', max: 16, dim: 1, pale: true },
   dark: { url: `${ESRI}/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
@@ -375,7 +379,8 @@ function paintLand(ctx) {
     // Dimming the tiles alone leaves a pale sea with plenty of contrast of
     // its own; the wash pushes the whole ground back so the birds are the
     // brightest thing on the frame, which is the entire point of it.
-    ctx.fillStyle = pale() ? 'rgba(255, 255, 255, .30)' : 'rgba(5, 8, 14, .34)';
+    // Just enough to seat the marks on the ground, not enough to drown it.
+    ctx.fillStyle = pale() ? 'rgba(255, 255, 255, .30)' : 'rgba(5, 8, 14, .16)';
     ctx.fillRect(0, 0, state.w, state.h);
   } else {
     // Until the imagery lands - or with it turned off - the drawn world.
@@ -594,10 +599,13 @@ function ink() {
   return pale()
     ? { primary: '#0f2236', secondary: 'rgba(15,34,54,.78)',
         muted: 'rgba(15,34,54,.60)', hair: 'rgba(15,34,54,.38)',
-        warn: '#8a4b00', shadow: 'rgba(255,255,255,.85)' }
-    : { primary: '#ffffff', secondary: 'rgba(255,255,255,.72)',
-        muted: 'rgba(255,255,255,.62)', hair: 'rgba(255,255,255,.34)',
-        warn: 'rgba(255,214,140,.92)', shadow: 'rgba(0,0,0,.72)' };
+        warn: '#8a4b00', accent: '#4a7c12', shadow: 'rgba(255,255,255,.85)' }
+    /* The same ink the animation view uses: its off-white, its warm amber for
+       figures and its lime accent, so the two pages read as one piece of
+       software rather than two. */
+    : { primary: '#f4f2ee', secondary: 'rgba(244,242,238,.76)',
+        muted: 'rgba(244,242,238,.58)', hair: 'rgba(244,242,238,.32)',
+        warn: '#ffd9a0', accent: '#a9e34b', shadow: 'rgba(0,0,0,.72)' };
 }
 
 const MONTHS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
@@ -645,7 +653,7 @@ function drawHud(ctx, t) {
   ctx.textAlign = 'right';
   ctx.fillText(sub, W - pad, 192 * S);
 
-  ctx.fillStyle = C.primary;
+  ctx.fillStyle = C.warn;
   ctx.font = `800 ${Math.round(46 * S)}px system-ui, -apple-system, sans-serif`;
   ctx.fillText(when.toLocaleDateString('en-GB',
     { day: 'numeric', month: 'short' }).toUpperCase(), W - pad, 252 * S);
@@ -664,7 +672,7 @@ function drawHud(ctx, t) {
     ctx.fillText(MONTHS[(start + m) % 12], x, axY - 9 * S);
   }
   const hx = axX + (t / Math.max(1, d.times.length - 1)) * axW;
-  ctx.fillStyle = C.primary;
+  ctx.fillStyle = C.accent;
   ctx.beginPath(); ctx.arc(hx, axY, 4.2 * S, 0, Math.PI * 2); ctx.fill();
 
   // The legend, and the sentence that keeps it honest.
@@ -800,9 +808,13 @@ async function boot() {
     state.basemap = wantMap;
     $('basemap').value = wantMap;
   }
+  // So the nav, which sits on the map rather than on a panel, can follow the
+  // ground along with everything else drawn there.
+  document.body.classList.toggle('pale', pale());
   $('more').onclick = () => document.body.classList.toggle('more');
   $('basemap').onchange = (e) => {
     state.basemap = e.target.value;
+    document.body.classList.toggle('pale', pale());
     tiles.canvas = null;
     tiles.credit = '';
     loadTiles();

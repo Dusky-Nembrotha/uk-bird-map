@@ -8,7 +8,14 @@
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: #07090c; color: #f0efec; overflow: hidden;
+    /* The animation view's own tokens, so the two pages are plainly the same
+       piece of software - the control bar here had drifted into generic grey
+       while the map beside it was lime and amber on satellite. */
+    --accent: #a9e34b;
+    --ink: #f4f2ee;
+    --panel: rgba(10, 12, 16, .72);
+    --hair: rgba(255, 255, 255, .14);
+    margin: 0; background: #07090c; color: var(--ink); overflow: hidden;
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
@@ -25,18 +32,39 @@
     /* It used to be a single rigid row and ran off both edges of a phone. */
     flex-wrap: wrap; justify-content: center;
     max-width: calc(100vw - 20px);
-    padding: 8px 14px; border-radius: 22px;
-    background: rgba(12,14,18,.78); border: 1px solid rgba(255,255,255,.12);
-    backdrop-filter: blur(8px);
+    padding: 9px 14px; border-radius: 16px;
+    background: var(--panel); border: 1px solid var(--hair);
+    backdrop-filter: blur(9px); -webkit-backdrop-filter: blur(9px);
   }
   button {
-    font: inherit; color: #f0efec; background: rgba(255,255,255,.09);
-    border: 1px solid rgba(255,255,255,.16); border-radius: 8px;
-    padding: 5px 11px; cursor: pointer;
+    font: inherit; color: var(--ink); background: rgba(255,255,255,.07);
+    border: 1px solid var(--hair); border-radius: 9px;
+    padding: 6px 12px; cursor: pointer; transition: background .12s;
   }
-  button:hover { background: rgba(255,255,255,.16); }
-  select, input[type=range] { font: inherit; color: #f0efec; background: rgba(255,255,255,.07);
-    border: 1px solid rgba(255,255,255,.16); border-radius: 8px; padding: 4px 8px; }
+  button:hover { background: rgba(255,255,255,.15); }
+  #play { min-width: 74px; font-weight: 600; }
+  select { font: inherit; color: var(--ink); background: rgba(255,255,255,.06);
+    border: 1px solid var(--hair); border-radius: 9px; padding: 5px 9px; }
+  /* The scrubber takes the accent, as it does on the animation view. */
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; background: transparent;
+    height: 20px;
+  }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 4px; border-radius: 2px; background: rgba(255,255,255,.18);
+  }
+  input[type=range]::-moz-range-track {
+    height: 4px; border-radius: 2px; background: rgba(255,255,255,.18);
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; margin-top: -6px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); border: 0; cursor: pointer;
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); border: 0; cursor: pointer;
+  }
   input[type=range] { padding: 0; width: 190px; max-width: 46vw; }
   #species { max-width: min(200px, 44vw); }
   #nav { position: fixed; top: 14px; left: 16px; }
@@ -59,16 +87,21 @@
   }
   /* On a wide screen there is room for everything, so the toggle is noise. */
   @media (min-width: 621px) { #more { display: none; } }
-  .lbl { font-size: 12px; color: #a9a8a2; font-variant-numeric: tabular-nums; }
+  .lbl { font-size: 12px; color: rgba(244,242,238,.62); font-variant-numeric: tabular-nums; }
   /* It opened as a page with no way off it. */
   #nav {
     position: fixed; top: 14px; left: 16px; z-index: 30; display: flex;
     gap: 14px; align-items: center; font-size: 13px;
   }
-  #nav a { color: #a9a8a2; text-decoration: none; }
-  #nav a:hover { color: #f0efec; text-decoration: underline;
+  #nav a { color: rgba(244,242,238,.62); text-decoration: none; }
+  #nav a:hover { color: var(--ink); text-decoration: underline;
                  text-underline-offset: 3px; }
-  #nav strong { color: #a9e34b; font-weight: 600; }
+  #nav strong { color: var(--accent); font-weight: 600; }
+  /* The nav sits on the map, not on a panel, so it has to follow the ground
+     like everything else drawn there - light ink vanished on the pale map. */
+  body.pale #nav a { color: rgba(15, 34, 54, .66); }
+  body.pale #nav a:hover { color: #0f2236; }
+  body.pale #nav strong { color: #3c6b00; }
 
   #loading { position: fixed; inset: 0; display: grid; place-items: center;
     color: #a9a8a2; font-size: 14px; }
@@ -93,8 +126,8 @@
   <span class="lbl" id="when">—</span>
   <button id="more" aria-label="More controls" title="More">⋯</button>
   <select id="basemap" aria-label="Backdrop">
-    <option value="light" selected>Light map</option>
-    <option value="satellite">Satellite</option>
+    <option value="light">Light map</option>
+    <option value="satellite" selected>Satellite</option>
     <option value="dark">Dark map</option>
     <option value="none">Drawn</option>
   </select>
