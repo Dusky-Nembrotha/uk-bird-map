@@ -538,10 +538,19 @@ function drawHud(ctx, t) {
   ctx.fillText(title, W / 2, 150 * S);
   ctx.letterSpacing = '0px';
 
-  ctx.fillStyle = 'rgba(255,255,255,.72)';
+  /* Only claim a year when there is one. A backfill that stopped in March
+     still produces a playable file, and captioning it "one year" would be a
+     straightforward lie about the half that is missing. */
+  const span = d.span || { complete: true };
+  const sub = span.complete ? 'ONE YEAR OF MIGRATION' : (() => {
+    const f = new Date(span.from + 'T12:00:00'), t = new Date(span.to + 'T12:00:00');
+    const m = (x) => x.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+    return `${m(f)} – ${m(t)} · PART YEAR`.toUpperCase();
+  })();
+  ctx.fillStyle = span.complete ? 'rgba(255,255,255,.72)' : 'rgba(255,214,140,.92)';
   ctx.font = `600 ${Math.round(23 * S)}px system-ui, -apple-system, sans-serif`;
   ctx.textAlign = 'right';
-  ctx.fillText('ONE YEAR OF MIGRATION', W - pad, 192 * S);
+  ctx.fillText(sub, W - pad, 192 * S);
 
   ctx.fillStyle = '#ffffff';
   ctx.font = `800 ${Math.round(46 * S)}px system-ui, -apple-system, sans-serif`;
@@ -672,7 +681,8 @@ async function boot() {
     o.value = it.slug;
     // The count of weeks that actually move is the honest headline for a
     // species here: a bird with two is a bird this method cannot see.
-    o.textContent = `${it.common} — ${it.movingWeeks} weeks on the move`;
+    o.textContent = `${it.common} — ${it.movingWeeks} weeks on the move`
+      + (it.complete === false ? ' (part year)' : '');
     sel.appendChild(o);
   }
   const want = q.get('species');

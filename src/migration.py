@@ -429,6 +429,17 @@ def build(species, out_path=None, start=None, end=None):
     log.info("share of the population on the move: quietest %.3f, busiest %.3f",
              min(moved), max(moved))
 
+    # What the clip can honestly claim. A backfill that stopped halfway leaves
+    # a file that looks like a year and is not one - and for a goose the half
+    # it loses is the spring, which is the part worth watching. Say the real
+    # span on the frame rather than letting the title assert a year.
+    first, last = weeks[0], weeks[-1]
+    want_end = date.fromisoformat(end) if end else last
+    complete = (want_end - last).days <= 21
+    if not complete:
+        log.warning("%s: data stops at %s, short of %s - the clip will say so",
+                    species, last.isoformat(), want_end.isoformat())
+
     spots = _hotspots(rows)
     log.info("hotspots: %s", ", ".join(h["name"] for h in spots) or "none named")
 
@@ -437,6 +448,8 @@ def build(species, out_path=None, start=None, end=None):
     payload = {
         "species": {"common": common, "sci": sci},
         "records": len(rows),
+        "span": {"from": first.isoformat(), "to": last.isoformat(),
+                 "complete": complete},
         "grid": g,
         "times": [w.isoformat() for w in weeks],
         "n": ns,
@@ -476,7 +489,8 @@ def _write_index(outdir):
         moving = sum(1 for wk in d["arcs"] if wk)
         items.append({"slug": f.stem, "common": d["species"]["common"],
                       "sci": d["species"]["sci"], "records": d["records"],
-                      "weeks": len(d["times"]), "movingWeeks": moving})
+                      "weeks": len(d["times"]), "movingWeeks": moving,
+                      "complete": d.get("span", {}).get("complete", True)})
     items.sort(key=lambda i: i["common"])
     (outdir / "index.json").write_text(json.dumps(items, separators=(",", ":")))
     log.info("index: %d species", len(items))
