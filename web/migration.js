@@ -108,7 +108,8 @@ function wireZoom(canvas) {
     const [x, y] = toCanvas(e);
     zoomAt(x, y, Math.exp(-e.deltaY * 0.0015));
     updateZoomUi();
-    queueTiles(); queueLand();
+    queueTiles();
+    queueReports(); queueLand();
   }, { passive: false });
 
   /* Pointer events cover mouse and touch together, so one finger pans and two
@@ -166,7 +167,7 @@ function wireZoom(canvas) {
     if (live.size === 0) {
       drag = null;
       canvas.style.cursor = view.k > 1 ? 'grab' : 'default';
-      queueTiles(); queueLand();
+      queueTiles(); queueLand(); queueReports();
     }
   };
   canvas.addEventListener('pointerup', end);
@@ -175,7 +176,8 @@ function wireZoom(canvas) {
     const [x, y] = toCanvas(e);
     zoomAt(x, y, e.shiftKey ? 1 / 1.8 : 1.8);
     updateZoomUi();
-    queueTiles(); queueLand();
+    queueTiles();
+    queueReports(); queueLand();
   });
 }
 
@@ -400,43 +402,102 @@ function paintLand(ctx) {
   for (const r of state.geo.land) if (near(r)) { ring(r); ctx.stroke(); }
 }
 
+/* The reports, rendered once per week rather than once per frame.
+
+   This was the crash. A busy week is some fourteen hundred reports, each one
+   allocating a radial gradient and filling two paths, every frame - around
+   seventy thousand gradient objects a second, which a phone will not survive
+   however patient it is. Nothing in that layer moves within a week, so it is
+   drawn into an offscreen canvas and blitted: two drawImage calls a frame in
+   place of several thousand operations.
+
+   The cache is keyed on the view as well as the week, because panning and
+   zooming do move the dots; it holds three layers, which is the pair being
+   cross-faded plus the one about to be needed. */
+
+const reportCache = new Map();
+let reportKey = '';
+
+function viewKey() {
+  return [state.w, state.h, view.k.toFixed(3), Math.round(view.tx),
+          Math.round(view.ty), state.basemap].join(':');
+}
+
+/* Cleared when the map settles, not while it is moving. Keying the cache on
+   the live view and rebuilding on mismatch would have rebuilt every layer on
+   every frame of a drag - worse than the per-frame drawing it replaced. */
+function queueReports() {
+  reportCache.clear();
+  reportKey = '';
+}
+
+function reportLayer(w) {
+  if (!reportKey) reportKey = viewKey();
+  const hit = reportCache.get(w);
+  if (hit) return hit;
+
+  const arr = state.d.points[w] || [];
+  const c = document.createElement('canvas');
+  c.width = Math.round(state.w * state.dpr);
+  c.height = Math.round(state.h * state.dpr);
+  const g = c.getContext('2d');
+  g.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+
+  /* Inside the layer, light ink is added so overlapping reports pile up into
+     brightness; dark ink is laid normally, where repeated alpha over the same
+     colour converges on it, so a crowded estuary still ends up solid. Either
+     way the layer carries the density and the blit decides which way is up. */
+  g.globalCompositeOperation = pale() ? 'source-over' : 'lighter';
+  const halo = pale() ? '20, 60, 110' : '235, 244, 255';
+  const haloA = pale() ? 0.11 : 0.30;
+  const core = pale() ? 'rgba(12, 48, 92, 0.70)' : 'rgba(245, 250, 255, 0.85)';
+  for (let k = 0; k < arr.length; k += 2) {
+    const x = px(arr[k + 1]), y = py(arr[k]);
+    if (x < -20 || y < -20 || x > state.w + 20 || y > state.h + 20) continue;
+    const rg = g.createRadialGradient(x, y, 0, x, y, 9);
+    rg.addColorStop(0, `rgba(${halo}, ${haloA})`);
+    rg.addColorStop(1, `rgba(${halo}, 0)`);
+    g.fillStyle = rg;
+    g.beginPath(); g.arc(x, y, 9, 0, Math.PI * 2); g.fill();
+    g.fillStyle = core;
+    g.beginPath(); g.arc(x, y, 1.15, 0, Math.PI * 2); g.fill();
+  }
+
+  c._view = { k: view.k, tx: view.tx, ty: view.ty };
+  reportCache.set(w, c);
+  if (reportCache.size > 3) reportCache.delete(reportCache.keys().next().value);
+  return c;
+}
+
 function drawReports(ctx, t) {
-  /* The observations. Two consecutive weeks are cross-faded so a report does
-     not blink out on a week boundary - the data is weekly, the eye is not. */
+  /* Two consecutive weeks are cross-faded so a report does not blink out on a
+     week boundary - the data is weekly, the eye is not. */
   const d = state.d;
   const i = Math.max(0, Math.min(d.points.length - 1, Math.floor(t)));
   const j = Math.min(d.points.length - 1, i + 1);
   const f = t - i;
   ctx.save();
-  /* The blend has to turn over with the ground, not just the colour. On a
-     dark map the marks are added, so overlapping reports pile up into light
-     and density reads as brightness. Painting dark ink additively onto a
-     white basemap adds nothing at all - which is why the data disappeared
-     rather than merely dimmed. Multiply is the same idea the other way up:
-     overlap darkens, and a crowded estuary still shows as crowded. */
   ctx.globalCompositeOperation = pale() ? 'multiply' : 'lighter';
-  const paint = (arr, alpha) => {
+  const blit = (layer, alpha) => {
     if (alpha <= 0.01) return;
-    for (let k = 0; k < arr.length; k += 2) {
-      const x = px(arr[k + 1]), y = py(arr[k]);
-      if (x < -20 || y < -20 || x > state.w + 20 || y > state.h + 20) continue;
-      const g = ctx.createRadialGradient(x, y, 0, x, y, 9);
-      const halo = pale() ? '20, 60, 110' : '235, 244, 255';
-      /* Gentler on the pale ground than on the dark one. Multiply compounds:
-         twenty reports on an estuary stack into solid black at the alpha that
-         merely glows white when it is added. */
-      g.addColorStop(0, `rgba(${halo}, ${(pale() ? 0.11 : 0.30) * alpha})`);
-      g.addColorStop(1, `rgba(${halo}, 0)`);
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = pale() ? `rgba(12, 48, 92, ${0.70 * alpha})`
-                             : `rgba(245, 250, 255, ${0.85 * alpha})`;
-      ctx.beginPath(); ctx.arc(x, y, 1.15, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    const lv = layer._view;
+    // Mid-gesture the layer holds pixels for where the map used to be, so it
+    // is shifted and scaled onto where we are now - the same trick the tiles
+    // use, and the reason a drag stays smooth without a rebuild.
+    if (lv && (lv.k !== view.k || lv.tx !== view.tx || lv.ty !== view.ty)) {
+      const scale = view.k / lv.k;
+      ctx.translate(view.tx - lv.tx * scale, view.ty - lv.ty * scale);
+      ctx.scale(scale, scale);
     }
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(layer, 0, 0, state.w, state.h);
+    ctx.restore();
   };
-  paint(d.points[i], 1 - f);
-  paint(d.points[j], f);
+  blit(reportLayer(i), 1 - f);
+  blit(reportLayer(j), f);
   ctx.restore();
+  if (perf.on) perf.dots += 2;
 }
 
 const TRAIL = 14;          // positions kept per particle
@@ -475,6 +536,16 @@ const at = (q, t) => {
           m * m * q.y0 + 2 * m * t * q.cy + t * t * q.y1];
 };
 
+/* How many comet segments the whole frame may spend.
+
+   The budget is generous because, once batched, a segment costs two Path2D
+   calls and nothing else - what was killing the page was three thousand
+   separate beginPath/stroke pairs, not the number of lines. Capping it hard
+   thinned the streams for no gain; this keeps the density and still bounds
+   the worst week. */
+const SEG_BUDGET = 4200;
+const ALPHA_STEPS = 6;          // batching granularity, not a visible step
+
 function drawJourneys(ctx, now) {
   const d = state.d;
   const i = Math.max(0, Math.min(d.arcs.length - 1, Math.floor(state.t)));
@@ -491,6 +562,24 @@ function drawJourneys(ctx, now) {
   ctx.globalCompositeOperation = pale() ? 'multiply' : 'lighter';
   ctx.lineCap = 'round';
 
+  /* Segments are collected into a path per (taper, alpha) bucket and stroked
+     once each - a couple of dozen stroke calls a frame instead of thousands.
+     Quantising alpha to six steps is invisible on a moving comet and is what
+     makes the batching possible at all. */
+  const batches = new Map();
+  const add = (seg, alpha, p1, p2) => {
+    const bucket = Math.max(1, Math.round(alpha * ALPHA_STEPS));
+    const key = seg * 16 + bucket;
+    let path = batches.get(key);
+    if (!path) batches.set(key, (path = new Path2D()));
+    path.moveTo(p1[0], p1[1]);
+    path.lineTo(p2[0], p2[1]);
+  };
+
+  const total = (d.arcs[i] || []).length + (d.arcs[j] || []).length;
+  // Shared out across both cross-faded weeks, so the budget is a frame budget.
+  const perArc = total ? Math.max(1, Math.floor(SEG_BUDGET / Math.max(1, total) / 5)) : 1;
+
   const fly = (list, fade) => {
     if (fade <= 0.02) return;
     const biggest = list.reduce((m, a) => Math.max(m, a[4]), 1e-9);
@@ -504,7 +593,7 @@ function drawJourneys(ctx, now) {
       const weight = a[4] / biggest;
       // More of the population moving means more birds in the air, not a
       // brighter smear: the count carries the quantity.
-      const n = 1 + Math.round(weight * 5);
+      const n = Math.max(1, Math.min(1 + Math.round(weight * 5), perArc));
       for (let b = 0; b < n; b++) {
         const phase = (now * SPEED + k * 0.37 + b / n) % 1;
         const head = at(q, phase);
@@ -515,11 +604,8 @@ function drawJourneys(ctx, now) {
           const t2 = phase - ((seg + 1) / 5) * comet;
           if (t2 < 0) break;
           const p1 = seg === 0 ? head : at(q, t1), p2 = at(q, t2);
-          ctx.strokeStyle = pale()
-            ? `rgba(20, 70, 125, ${alpha * (1 - seg / 5)})`
-            : `rgba(226, 240, 255, ${alpha * (1 - seg / 5)})`;
-          ctx.lineWidth = 1.6 - seg * 0.22;
-          ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
+          add(seg, alpha * (1 - seg / 5), p1, p2);
+          if (perf.on) perf.grads++;
         }
       }
     });
@@ -527,6 +613,15 @@ function drawJourneys(ctx, now) {
 
   fly(d.arcs[i], 1 - f);
   fly(d.arcs[j], f);
+
+  const rgb = pale() ? '20, 70, 125' : '226, 240, 255';
+  for (const [key, path] of batches) {
+    const seg = Math.floor(key / 16), bucket = key % 16;
+    ctx.strokeStyle = `rgba(${rgb}, ${bucket / ALPHA_STEPS})`;
+    ctx.lineWidth = 1.6 - seg * 0.22;
+    ctx.stroke(path);
+    if (perf.on) perf.strokes++;
+  }
   ctx.restore();
 }
 
@@ -696,8 +791,14 @@ function drawHud(ctx, t) {
 
 /* ----------------------------------------------------------------- loop */
 
+/* ?fps=1 reports the real frame cost in the zoom slot. Kept in rather than
+   used once and deleted: "the browser crashes" needs a number next to it, and
+   the number has to be obtainable on the device that crashed. */
+const perf = { on: false, n: 0, sum: 0, t0: 0, dots: 0, grads: 0, strokes: 0 };
+
 let last = 0;
 function frame(now) {
+  const tStart = perf.on ? performance.now() : 0;
   const dt = Math.min(3, (now - last) / 16.67 || 1);
   last = now;
   const ctx = state.ctx;
@@ -714,6 +815,21 @@ function frame(now) {
     if (state.t >= state.weeks - 1) state.t = 0;
     $('scrub').value = state.t;
     $('when').textContent = state.d.times[Math.round(state.t)];
+  }
+  if (perf.on) {
+    perf.sum += performance.now() - tStart;
+    perf.n += 1;
+    if (now - perf.t0 > 500) {
+      const ms = perf.sum / Math.max(1, perf.n);
+      const per = perf.dots / Math.max(1, perf.n);
+      // Wall-clock on a real device; counts everywhere, including headless,
+      // where virtual time pins performance.now() to zero.
+      const segs = perf.grads / Math.max(1, perf.n);
+      const calls = perf.strokes / Math.max(1, perf.n);
+      $('zoom').textContent =
+        `${per.toFixed(0)} blits · ${segs.toFixed(0)} segs in ${calls.toFixed(0)} strokes`;
+      perf.sum = 0; perf.n = 0; perf.dots = 0; perf.grads = 0; perf.strokes = 0; perf.t0 = now;
+    }
   }
   requestAnimationFrame(frame);
 }
@@ -744,7 +860,7 @@ function resize() {
   state.ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
   setProjection(w, h);
   clampPan();
-  queueTiles(); queueLand();
+  queueTiles(); queueLand(); queueReports();
 }
 
 async function loadSpecies(slug) {
@@ -811,6 +927,7 @@ async function boot() {
   // So the nav, which sits on the map rather than on a panel, can follow the
   // ground along with everything else drawn there.
   document.body.classList.toggle('pale', pale());
+  perf.on = q.get('fps') === '1';
   $('more').onclick = () => document.body.classList.toggle('more');
   $('basemap').onchange = (e) => {
     state.basemap = e.target.value;
