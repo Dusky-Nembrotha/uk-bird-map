@@ -240,6 +240,11 @@ SPECIES = {
 STRAY_TOLERANCE = 0.02          # journeys allowed outside the flyway
 ABSENT_TOLERANCE = 0.01         # birds allowed in a region it should not use
 WINTER_SHARE = 0.55             # of midwinter birds in expected regions
+# This is a British bird map. A species the reference says occurs here must
+# actually appear here, in numbers, in the season it is supposed to - a clip
+# whose window stops before the bird arrives is the wrong clip to show.
+UK_MIN_BIRDS = 50
+UK_MIN_SHARE = 0.002
 
 
 def _region(lat, lon):
@@ -402,7 +407,35 @@ def validate(path):
                     f"checked against {len(ref['absent'])} region(s) it should "
                     f"not use"))
 
-    # 7. How much of the map is guesswork between counts.
+    # 7. It has to show up in Britain, which is the point of the map.
+    uk_seasons = [lab for lab, exp in (("winter", ref["winter"]),
+                                       ("summer", ref["summer"]))
+                  if "Britain/Ireland" in exp]
+    s_lat, n_lat, w_lon, e_lon = REGIONS["Britain/Ireland"]
+    uk_all = [p for p in allpts
+              if s_lat <= p[0] <= n_lat and w_lon <= p[1] <= e_lon]
+    uk_birds = sum(p[2] for p in uk_all)
+    if not uk_seasons:
+        res.append(("INFO", f"not expected in Britain; {uk_birds:,} birds "
+                            f"recorded here anyway"))
+    elif uk_birds < UK_MIN_BIRDS or uk_birds / total < UK_MIN_SHARE:
+        res.append(("FAIL", f"only {uk_birds:,} birds in Britain and Ireland "
+                            f"({uk_birds / total * 100:.2f}%) - the reference "
+                            f"says it should be here in "
+                            f"{' and '.join(uk_seasons)}. Either the window "
+                            f"stops before it arrives, or the data is wrong"))
+    else:
+        peak = 0
+        for w in range(len(d["points"])):
+            arr = d["points"][w]
+            wk = sum(arr[k + 2] for k in range(0, len(arr), 3)
+                     if s_lat <= arr[k] <= n_lat and w_lon <= arr[k + 1] <= e_lon)
+            peak = max(peak, wk)
+        res.append(("PASS", f"Britain and Ireland: {uk_birds:,} birds "
+                            f"({uk_birds / total * 100:.0f}% of all), peak "
+                            f"week {peak:,}"))
+
+    # 8. How much of the map is guesswork between counts.
     weeks = len(d["points"])
     squares = {(p[0], p[1]) for p in allpts}
     seen = sum(1 for w in range(weeks)

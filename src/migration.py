@@ -816,6 +816,17 @@ def _write_index(outdir):
             continue
         d = json.loads(f.read_text())
         moving = sum(1 for wk in d["arcs"] if wk)
+        # A species fetched only as far as September has no business in the
+        # menu: its clip ends before the bird reaches Britain, which is worse
+        # than not offering it. The file stays on disk to be inspected.
+        weeks = len(d["times"])
+        # Twenty weeks is autumn and winter, which for most of these birds is
+        # the British half of the year and worth showing. Six weeks ending in
+        # September is a clip that stops before the bird arrives.
+        if not d.get("span", {}).get("complete", True) and weeks < 20:
+            log.warning("%s: only %d weeks - left out of the menu until the "
+                        "backfill finishes", d["species"]["common"], weeks)
+            continue
         items.append({"slug": f.stem, "common": d["species"]["common"],
                       "sci": d["species"]["sci"], "records": d["records"],
                       "weeks": len(d["times"]), "movingWeeks": moving,

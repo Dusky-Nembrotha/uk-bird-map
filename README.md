@@ -401,6 +401,7 @@ What it tests, per species:
 | **Summer range** | the same for the breeding season |
 | **Seasonal shift** | how far north the centroid moves between winter and summer |
 | **Exclusions** | ≤1% of birds in regions the species has no business in |
+| **Britain** | does the bird actually appear here, in the season it should — this is a British map, and a clip whose window stops before the bird arrives is the wrong clip |
 | **Coverage** | what share of site-weeks were actually counted rather than interpolated |
 
 Two things it deliberately will not do. Where the breeding grounds are
