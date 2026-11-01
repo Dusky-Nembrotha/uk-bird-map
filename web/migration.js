@@ -475,12 +475,12 @@ function reportLayer(w) {
     const w8 = Math.min(2.6, Math.sqrt(Math.sqrt(pt.n)) );
     const R = 4.2 * w8;
     const rg = g.createRadialGradient(x, y, 0, x, y, R);
-    rg.addColorStop(0, `rgba(${halo}, ${pale() ? 0.10 : 0.16})`);
+    rg.addColorStop(0, `rgba(${halo}, ${pale() ? 0.16 : 0.26})`);
     rg.addColorStop(1, `rgba(${halo}, 0)`);
     g.fillStyle = rg;
     g.beginPath(); g.arc(x, y, R, 0, Math.PI * 2); g.fill();
-    g.fillStyle = `rgba(${core}, ${pale() ? 0.72 : 0.80})`;
-    g.beginPath(); g.arc(x, y, 0.9 + 0.5 * w8, 0, Math.PI * 2); g.fill();
+    g.fillStyle = `rgba(${core}, ${pale() ? 0.85 : 0.95})`;
+    g.beginPath(); g.arc(x, y, 1.15 + 0.6 * w8, 0, Math.PI * 2); g.fill();
   }
 
   c._view = { k: view.k, tx: view.tx, ty: view.ty };
@@ -574,8 +574,8 @@ const ALPHA_STEPS = 6;          // batching granularity, not a visible step
    the absolute share of the population on the move: at this scale the
    busiest week of the year carries a couple of hundred, and a quiet one
    carries a handful, which is the point of watching it. */
-const COMET_SCALE = 1700;
-const COMET_MAX = 8;
+const COMET_SCALE = 3600;
+const COMET_MAX = 14;
 // The share at which a journey is drawn at full strength.
 const FULL_SHARE = 0.004;
 
@@ -670,8 +670,13 @@ function drawJourneys(ctx, now) {
 function drawHotspots(ctx) {
   const spots = state.d.hotspots || [];
   if (!spots.length) return;
+  /* Subordinate to the records, deliberately. These labels never change all
+     year, and at full strength they were the brightest thing left on a quiet
+     week - in February, with five reports in the whole of Europe, every lit
+     pixel on the map was furniture. Annotation should not be mistakable for
+     a sighting. */
   const S = state.h / 1920;
-  ctx.font = `600 ${Math.round(21 * S)}px system-ui, -apple-system, sans-serif`;
+  ctx.font = `500 ${Math.round(19 * S)}px system-ui, -apple-system, sans-serif`;
   ctx.textBaseline = 'middle';
   const placed = [];
   // The biggest first, so when two labels fight it is the lesser that loses.
@@ -696,9 +701,9 @@ function drawHotspots(ctx) {
     }
     // A ring marks the place whether or not its name would fit.
     ctx.beginPath();
-    ctx.arc(x, y, 3.1 * S, 0, Math.PI * 2);
-    ctx.strokeStyle = pale() ? 'rgba(20, 60, 110, .72)' : 'rgba(255,255,255,.78)';
-    ctx.lineWidth = 1.3 * S;
+    ctx.arc(x, y, 2.4 * S, 0, Math.PI * 2);
+    ctx.strokeStyle = pale() ? 'rgba(20, 60, 110, .42)' : 'rgba(255,255,255,.40)';
+    ctx.lineWidth = 1.1 * S;
     ctx.stroke();
     if (!put) continue;
     placed.push(put);
@@ -706,7 +711,7 @@ function drawHotspots(ctx) {
     ctx.textAlign = 'left';
     ctx.shadowColor = pale() ? 'rgba(255,255,255,.9)' : 'rgba(0,0,0,.85)';
     ctx.shadowBlur = 5 * S;
-    ctx.fillStyle = pale() ? 'rgba(18, 38, 60, .95)' : 'rgba(255,255,255,.90)';
+    ctx.fillStyle = pale() ? 'rgba(18, 38, 60, .72)' : 'rgba(244,242,238,.60)';
     ctx.fillText(sp.name, put.x0, put.y);
     ctx.shadowBlur = 0;
   }
