@@ -499,20 +499,28 @@ function weekPlaces(w) {
    the opposite of the truth.
 
    Linear across that range is impossible: at the goose's scale the warbler is
-   less than half a point. The count is therefore compressed by a square root,
-   the same way a proportional-symbol map scales a circle's radius, against a
-   peak shared by all species. Barnacle Goose fills the map at 900 points,
-   Pink-footed Goose reaches 314, Bewick's Swan 52, the warbler 20 - ordered
-   as they should be and all of them legible.
+   less than half a point. The count is compressed instead, against a peak
+   shared by all species.
 
-   The compression is an indicator, so the exact figure is on the frame beside
-   the date, where it is not compressed at all. */
+   A square root was the first try and went too far the other way - it left
+   Europe's best warbler week as twenty points, which reads as half a dozen
+   birds on the continent. A fourth root holds the order while keeping the
+   scarce end legible: Barnacle Goose fills the map at 900, White-fronted 743,
+   Brent 596, Pink-footed 531, Bewick's Swan 216, the warbler 133 at its peak
+   and around 40 in an ordinary week.
+
+   It is a strong compression and the frame says so, with the exact figure
+   beside the date where nothing is compressed at all. */
+const COUNT_POWER = 0.25;
 function wantBirds(w) {
   const birds = (state.d.weekBirds || [])[w] || 0;
   if (!birds) return 0;
   const peak = state.peakBirds || Math.max(1, ...(state.d.weekBirds || [1]));
-  return Math.min(FLOCK_MAX,
-                  Math.max(1, Math.round(FLOCK_MAX * Math.sqrt(birds / peak))));
+  // Never more points than birds. The compression lifts the scarce end, and
+  // without this a week in which twenty-five warblers were counted was drawn
+  // with fifty - which is a different kind of lie from the one being fixed.
+  return Math.min(FLOCK_MAX, birds,
+                  Math.max(1, Math.round(FLOCK_MAX * (birds / peak) ** COUNT_POWER)));
 }
 
 function pickPlace(list) {
