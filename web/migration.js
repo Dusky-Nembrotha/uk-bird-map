@@ -533,9 +533,20 @@ function pickPlace(list) {
   return list[list.length - 1];
 }
 
-// How far beyond the frame an arriving bird starts, in degrees. Generous, so
-// it is off-screen at the opening zoom rather than popping in at the edge.
-const EDGE_DEG = 17;
+/* How far an arriving or departing bird travels, in degrees.
+
+   This was seventeen, far enough to start off-screen. It was also far enough
+   to be a lie: a Pink-footed Goose leaving Norfolk flew seventeen degrees
+   along the week's bearing and ended up over Spain, and a winter of those
+   drew a dense southward stream across France and the Mediterranean - a
+   flyway this bird does not have and the model never proposed. Checked
+   against the data, every journey in the model lies between 49N and 71N;
+   the streams into Iberia were drawn entirely by this constant.
+
+   Short now. A bird fades in a little outside the place it is joining and
+   fades out a little beyond the one it is leaving. We do not know where it
+   came from, and three degrees does not pretend to. */
+const EDGE_DEG = 3;
 
 function newBird(place) {
   return { lat: place.lat, lon: place.lon, flying: false,
@@ -691,8 +702,8 @@ function updateFlock() {
     const u = Math.max(0, Math.min(1, (state.t - b.t0) / (b.t1 - b.t0)));
     // Faded rather than popped, so an arrival reads as coming into view and a
     // departure as going out of it.
-    b.fade = b.arriving ? Math.min(1, u / 0.3)
-           : b.leaving ? Math.max(0, 1 - u / 0.8) : 1;
+    b.fade = b.arriving ? Math.min(1, u / 0.55)
+           : b.leaving ? Math.max(0, 1 - Math.max(0, u - 0.1) / 0.6) : 1;
     if (b.leaving && u >= 1) { gone = true; continue; }
     // Eased, so a departure looks like a bird leaving rather than a slide.
     const e = u * u * (3 - 2 * u);

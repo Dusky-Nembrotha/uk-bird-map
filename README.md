@@ -375,6 +375,28 @@ the record whatever the geese are doing. The Icelandic end falls from 123
 reports a week to 22 — real, but too sparse to clear the noise test. Loosening
 the test to catch it also invents movement in June and July, so it stays shut.
 
+### Checking a species against its known flyway
+
+```bash
+python3 -m src.checkroutes
+```
+
+Every animation should be checked against what the bird actually does, not
+watched and nodded at. This encodes the published flyway for each species -
+latitude and longitude bounds, and which way it should be heading in autumn
+and in spring - and tests the built model against it.
+
+It exists because a Pink-footed Goose clip shipped showing a dense southward
+stream across France and the Mediterranean. The model was innocent: every
+journey in it lies between 49°N and 71°N. The renderer drew it, by sending
+departing birds seventeen degrees along the week's bearing, which from
+Norfolk is Spain. Nobody caught it, because catching it meant watching forty
+seconds of animation while knowing what a Pink-footed Goose does.
+
+The checker reports PASS, FAIL, WARN or INFO per test and exits non-zero on
+any failure, so it can gate a release. A species with no encoded reference is
+reported as SKIP rather than passing silently.
+
 ---
 
 ## Commands
