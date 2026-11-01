@@ -549,10 +549,19 @@ function pickPlace(list) {
 const EDGE_DEG = 3;
 
 function newBird(place) {
+  /* Traits a bird keeps for life, so that zooming in finds individuals and
+     not copies. Without these every bird on a journey shares one heading and
+     one speed, and a flock at close range reads as ruled parallel lines -
+     falling rain rather than birds. */
   return { lat: place.lat, lon: place.lon, flying: false,
            arriving: false, leaving: false, fade: 1,
            fromLat: 0, fromLon: 0, toLat: 0, toLon: 0, bow: 0, lane: 0,
-           t0: 0, t1: 1, trail: [], jitter: Math.random() };
+           t0: 0, t1: 1, trail: [], jitter: Math.random(),
+           wob: 0,                                   // set per journey
+           wobP: Math.random() * Math.PI * 2,        // where in its weave
+           wobF: 1.4 + Math.random() * 2.2,          // weaves per journey
+           pace: 0.55 + Math.random() * 0.9,         // how it spends the trip
+           grit: 0.72 + Math.random() * 0.56 };      // size and tail length
 }
 
 /* The way the population is moving this week, as a unit vector. Arrivals come
@@ -623,7 +632,15 @@ function launch(w, midflight) {
          the flight line so a departing flock reads as a skein rather than a
          single file. Geese travel close together, a raptor alone. */
       b.bow = a.length > 6 ? a[6] : 0;
-      b.lane = (Math.random() - 0.5) * (1 - (state.d.flight || {}).skein ?? 0.5);
+      /* Written as `1 - x ?? 0.5` this read as `(1 - x) ?? 0.5`, which is NaN
+         rather than 0.5 when a species has no skein, and NaN lane put every
+         bird at the same place. */
+      const skein = (state.d.flight || {}).skein ?? 0.5;
+      b.lane = (Math.random() - 0.5) * (1 - skein);
+      /* How far it wanders off the straight line, in degrees. A goose holds
+         its place in the skein; a harrier quarters about. Tight flockers
+         therefore weave least. */
+      b.wob = (0.06 + Math.random() * 0.26) * (1 - skein);
       // Staggered departures; far journeys take longer than near ones.
       /* Not smeared evenly across the week. Geese leave on a weather window,
          thousands at once; a raptor trickles through for a month. The
@@ -717,8 +734,11 @@ function updateFlock() {
     b.fade = b.arriving ? Math.min(1, u / 0.55)
            : b.leaving ? Math.max(0, 1 - Math.max(0, u - 0.1) / 0.6) : 1;
     if (b.leaving && u >= 1) { gone = true; continue; }
-    // Eased, so a departure looks like a bird leaving rather than a slide.
-    const e = u * u * (3 - 2 * u);
+    /* Eased, so a departure looks like a bird leaving rather than a slide -
+       then raised to the bird's own exponent, so two birds that set off
+       together do not arrive locked side by side. Monotonic either way, so
+       nothing ever flies backwards. */
+    const e = Math.pow(u * u * (3 - 2 * u), b.pace || 1);
     /* A quadratic through the control point the builder chose, not a ruled
        line between two dots. This is what the straightness was: the flock
        rewrite interpolated from and to directly and threw the route away. */
@@ -729,9 +749,16 @@ function updateFlock() {
     const m = 1 - e;
     b.lat = m * m * b.fromLat + 2 * m * e * cLat + e * e * b.toLat;
     b.lon = m * m * b.fromLon + 2 * m * e * cLon + e * e * b.toLon;
-    // A little across the line of flight, so a flock has width.
-    b.lat += (-dLon / span) * b.lane * 0.5;
-    b.lon += (dLat / span) * b.lane * 0.5;
+    /* Across the line of flight. The lane is tapered rather than constant, so
+       a flock has width in transit but closes on the place it is actually
+       going to instead of landing on parallel rails beside it. The weave on
+       top is each bird's own, and is what stops a close view from reading as
+       ruled lines of falling rain. */
+    const taper = Math.sin(Math.PI * e);
+    const weave = Math.sin(e * b.wobF * Math.PI * 2 + b.wobP) * b.wob;
+    const off = (b.lane * 0.6 + weave) * taper;
+    b.lat += (-dLon / span) * off;
+    b.lon += (dLat / span) * off;
     if (state.playing) {
       b.trail.push(b.lat, b.lon);
       if (b.trail.length > TRAIL * 2) b.trail.splice(0, 2);
@@ -780,16 +807,18 @@ function drawFlock(ctx) {
   for (const b of flock.birds) {
     if (!b.flying || b.trail.length < 4) continue;
     let spent = 0;
+    // Each bird's own tail length - a row of identical streaks reads as rain.
+    const tail = TAIL_PX * b.grit;
     let hx = px(b.trail[b.trail.length - 1]), hy = py(b.trail[b.trail.length - 2]);
-    for (let i = b.trail.length - 4; i >= 0 && spent < TAIL_PX; i -= 2) {
+    for (let i = b.trail.length - 4; i >= 0 && spent < tail; i -= 2) {
       const nx = px(b.trail[i + 1]), ny = py(b.trail[i]);
       const d = Math.hypot(nx - hx, ny - hy) || 0.001;
       // Clip the final segment so the tail ends exactly where its length runs
       // out, rather than overshooting by however far the last frame carried.
-      const room = TAIL_PX - spent;
+      const room = tail - spent;
       const cut = d > room ? room / d : 1;
       const ex = hx + (nx - hx) * cut, ey = hy + (ny - hy) * cut;
-      const f = 1 - spent / TAIL_PX;
+      const f = 1 - spent / tail;
       const bucket = Math.max(1, Math.round(f * 5));
       let path = batches.get(bucket);
       if (!path) batches.set(bucket, (path = new Path2D()));
@@ -813,7 +842,9 @@ function drawFlock(ctx) {
     const x = px(b.lon), y = py(b.lat);
     if (x < -R || y < -R || x > state.w + R || y > state.h + R) continue;
     ctx.globalAlpha = b.fade;
-    ctx.drawImage(img, x - R, y - R, R * 2, R * 2);
+    // Sized per bird from the same sprite: birds are not all one bird.
+    const r = R * b.grit;
+    ctx.drawImage(img, x - r, y - r, r * 2, r * 2);
     if (perf.on) perf.dots++;
   }
   ctx.restore();
