@@ -151,7 +151,7 @@ SPECIES = {
         name="Brambling", lat=(35, 72), lon=(-28, 45),
         autumn="s", spring="n",
         winter=["Germany/Poland", "France", "Britain/Ireland",
-                "Low Countries"],
+                "Low Countries", "Denmark", "Norway/Sweden"],
         summer=["Norway/Sweden", "Finland/Baltic"],
         absent=["Svalbard"], shift=3.0,
         note="Fennoscandian breeder wintering across Europe; numbers swing "
@@ -241,10 +241,16 @@ STRAY_TOLERANCE = 0.02          # journeys allowed outside the flyway
 ABSENT_TOLERANCE = 0.01         # birds allowed in a region it should not use
 WINTER_SHARE = 0.55             # of midwinter birds in expected regions
 # This is a British bird map. A species the reference says occurs here must
-# actually appear here, in numbers, in the season it is supposed to - a clip
-# whose window stops before the bird arrives is the wrong clip to show.
+# actually appear here, through the season it is supposed to.
+#
+# Tested on presence, not share. A single Danish roost held a million
+# Bramblings in January 2025 - a real count, at Artoft Plantage - which makes
+# Britain's perfectly healthy nine thousand into 0.12% of the species and
+# failed it on a share threshold. What matters is whether the bird is here
+# across the season, not whether Britain holds a large fraction of Europe.
 UK_MIN_BIRDS = 50
-UK_MIN_SHARE = 0.002
+UK_MIN_WEEKS = 4
+UK_LOW_SHARE = 0.002
 
 
 def _region(lat, lon):
@@ -418,22 +424,32 @@ def validate(path):
     if not uk_seasons:
         res.append(("INFO", f"not expected in Britain; {uk_birds:,} birds "
                             f"recorded here anyway"))
-    elif uk_birds < UK_MIN_BIRDS or uk_birds / total < UK_MIN_SHARE:
-        res.append(("FAIL", f"only {uk_birds:,} birds in Britain and Ireland "
-                            f"({uk_birds / total * 100:.2f}%) - the reference "
-                            f"says it should be here in "
-                            f"{' and '.join(uk_seasons)}. Either the window "
-                            f"stops before it arrives, or the data is wrong"))
     else:
-        peak = 0
+        peak, weeks_here = 0, 0
         for w in range(len(d["points"])):
             arr = d["points"][w]
             wk = sum(arr[k + 2] for k in range(0, len(arr), 3)
                      if s_lat <= arr[k] <= n_lat and w_lon <= arr[k + 1] <= e_lon)
+            if wk:
+                weeks_here += 1
             peak = max(peak, wk)
-        res.append(("PASS", f"Britain and Ireland: {uk_birds:,} birds "
-                            f"({uk_birds / total * 100:.0f}% of all), peak "
-                            f"week {peak:,}"))
+        if uk_birds < UK_MIN_BIRDS or weeks_here < UK_MIN_WEEKS:
+            res.append(("FAIL", f"only {uk_birds:,} birds in Britain and "
+                                f"Ireland across {weeks_here} weeks - the "
+                                f"reference says it should be here in "
+                                f"{' and '.join(uk_seasons)}. Either the "
+                                f"window stops before it arrives, or the data "
+                                f"is wrong"))
+        else:
+            share = uk_birds / total
+            res.append(("PASS", f"Britain and Ireland: {uk_birds:,} birds "
+                                f"across {weeks_here} weeks, peak week "
+                                f"{peak:,} ({share * 100:.1f}% of the "
+                                f"European total)"))
+            if share < UK_LOW_SHARE:
+                res.append(("INFO", "Britain is a small share of this "
+                                    "species, which for a bird with "
+                                    "continental roosts is expected"))
 
     # 8. How much of the map is guesswork between counts.
     weeks = len(d["points"])
