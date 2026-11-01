@@ -375,27 +375,52 @@ the record whatever the geese are doing. The Icelandic end falls from 123
 reports a week to 22 — real, but too sparse to clear the noise test. Loosening
 the test to catch it also invents movement in June and July, so it stays shut.
 
-### Checking a species against its known flyway
+### Checking a species before it ships
 
 ```bash
-python3 -m src.checkroutes
+python3 -m src.backfill  --species "Turdus iliacus" --from 2024-09-01 --to 2025-08-31
+python3 -m src.migration --from 2024-09-01 --to 2025-08-31
+python3 -m src.validate                       # or --species "Redwing"
 ```
 
-Every animation should be checked against what the bird actually does, not
-watched and nodded at. This encodes the published flyway for each species -
-latitude and longitude bounds, and which way it should be heading in autumn
-and in spring - and tests the built model against it.
+Every fault in this project was found by eye, late, by somebody noticing
+something looked wrong — a goose streaming into Spain, a warbler that appeared
+to number six, Waxwings absent from a winter they famously filled. Each is now
+a test, so the next species is checked rather than watched. `src.validate`
+exits non-zero on any failure, so it can gate a release.
 
-It exists because a Pink-footed Goose clip shipped showing a dense southward
-stream across France and the Mediterranean. The model was innocent: every
-journey in it lies between 49°N and 71°N. The renderer drew it, by sending
-departing birds seventeen degrees along the week's bearing, which from
-Norfolk is Spain. Nobody caught it, because catching it meant watching forty
-seconds of animation while knowing what a Pink-footed Goose does.
+What it tests, per species:
 
-The checker reports PASS, FAIL, WARN or INFO per test and exits non-zero on
-any failure, so it can gate a release. A species with no encoded reference is
-reported as SKIP rather than passing silently.
+| | |
+|---|---|
+| **Window** | does the data cover the whole year, or stop mid-migration |
+| **Flight rules** | is a group assigned, or is it silently taking the default |
+| **Flyway** | do the modelled journeys stay inside the known range (2% allowed for strays) |
+| **Direction** | net movement south in autumn, north in spring |
+| **Winter range** | ≥55% of midwinter birds in the expected wintering regions |
+| **Summer range** | the same for the breeding season |
+| **Seasonal shift** | how far north the centroid moves between winter and summer |
+| **Exclusions** | ≤1% of birds in regions the species has no business in |
+| **Coverage** | what share of site-weeks were actually counted rather than interpolated |
+
+Two things it deliberately will not do. Where the breeding grounds are
+genuinely unwatched — the Siberian tundra has no birders on it — the summer
+share is **noted, not tested**, because asserting it would test observer
+coverage rather than the bird; the seasonal latitude shift is the honest test
+for those species. And a season the window barely covers is skipped rather
+than failed, since a year ending in February contains three stray August weeks
+and testing "summer" against those tests nothing.
+
+**A species with no reference encoded is reported SKIP, not PASS.** An unknown
+bird is not a correct one — add it to `SPECIES` in `src/validate.py` before
+shipping it.
+
+Worth knowing: on its first runs this suite mostly caught *the reference*
+rather than the model. Bewick's Swan failed for wintering in Romania and again
+on the Evros delta, Short-eared Owl for wintering in Iberia, Brent Goose for
+not being counted on the Siberian tundra. All four were my encoding being
+wrong. The checks are only as good as what is written in them, so correcting a
+flyway note is worth more than it sounds.
 
 ---
 
