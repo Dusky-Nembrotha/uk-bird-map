@@ -57,6 +57,154 @@ Z_SIGNIFICANT = 2.0
 # make every other week look empty.
 CLIP_PCT = 99.0
 
+
+# ---------------------------------------------------------------- routing
+
+# How a bird travels, which is not the same for a goose and an osprey.
+#
+# A Pink-footed Goose crosses eight hundred kilometres of open Atlantic
+# between Iceland and Scotland without pausing. An Osprey will not: it soars
+# on thermals, thermals do not form over water, and the European population
+# funnels through Gibraltar and the Bosphorus rather than face the
+# Mediterranean. A warbler flies at night on a broad front and will cross a
+# sea, but in shorter hops than a goose and without the skein.
+#
+#   sea   what a kilometre over water costs against a kilometre over land
+#   bow   how far the route may bend from the straight line, as a fraction
+#         of its length, in search of a cheaper crossing
+#   hop   a typical single flight, in km - longer journeys are staged
+#   skein how tightly birds travel together, 0 singly to 1 in a line
+#   waves departures per week: a goose leaves on a weather window with
+#         thousands of others, a raptor trickles through for a month
+FLIGHT_GROUPS = {
+    "wildfowl":  {"sea": 0.25, "bow": 0.30, "hop": 1400, "skein": 0.85, "waves": 2},
+    "raptor":    {"sea": 4.00, "bow": 0.80, "hop": 350,  "skein": 0.05, "waves": 6},
+    "passerine": {"sea": 0.90, "bow": 0.45, "hop": 450,  "skein": 0.25, "waves": 3},
+    "wader":     {"sea": 0.35, "bow": 0.35, "hop": 1100, "skein": 0.70, "waves": 2},
+    "owl":       {"sea": 1.60, "bow": 0.55, "hop": 400,  "skein": 0.05, "waves": 4},
+}
+
+FLIGHT = {
+    "Anser brachyrhynchus": "wildfowl", "Anser albifrons": "wildfowl",
+    "Branta leucopsis": "wildfowl", "Branta bernicla": "wildfowl",
+    "Cygnus columbianus": "wildfowl", "Cygnus cygnus": "wildfowl",
+    "Pandion haliaetus": "raptor",
+    "Asio flammeus": "owl",
+    "Phylloscopus inornatus": "passerine", "Turdus iliacus": "passerine",
+    "Turdus pilaris": "passerine", "Fringilla montifringilla": "passerine",
+    "Bombycilla garrulus": "passerine", "Spinus spinus": "passerine",
+    "Coccothraustes coccothraustes": "passerine",
+    "Regulus ignicapilla": "passerine", "Ficedula hypoleuca": "passerine",
+    "Oenanthe oenanthe": "passerine", "Sylvia atricapilla": "passerine",
+    "Grus grus": "wader", "Calidris canutus": "wader",
+    "Limosa lapponica": "wader",
+}
+DEFAULT_GROUP = "passerine"
+
+
+def flight_rules(sci):
+    key = sci.split(" (")[0].strip()
+    for name, group in FLIGHT.items():
+        if key.lower().startswith(name.lower()):
+            return group, FLIGHT_GROUPS[group]
+    return DEFAULT_GROUP, FLIGHT_GROUPS[DEFAULT_GROUP]
+
+
+_LAND_MASK = {}
+
+
+def land_mask(step=0.1):
+    """A raster of where the land is, for costing a route over it.
+
+    Drawn from the same Natural Earth rings the map itself uses, so a route
+    that hugs a coastline hugs the coastline you can see.
+    """
+    if step in _LAND_MASK:
+        return _LAND_MASK[step]
+    from PIL import Image, ImageDraw
+    b = AREA_BBOX
+    w = int((b["east"] - b["west"]) / step) + 1
+    h = int((b["north"] - b["south"]) / step) + 1
+    img = Image.new("1", (w, h), 0)
+    draw = ImageDraw.Draw(img)
+    geo = json.loads((WEB_DATA / "geo.json").read_text())
+    to_px = lambda lon, lat: (((lon - b["west"]) / step),
+                              ((b["north"] - lat) / step))
+    for ring in geo["land"]:
+        if len(ring) > 2:
+            draw.polygon([to_px(x, y) for x, y in ring], fill=1)
+    for ring in geo["lakes"]:
+        if len(ring) > 2:
+            draw.polygon([to_px(x, y) for x, y in ring], fill=0)
+    arr = np.array(img, dtype=bool)
+    _LAND_MASK[step] = (arr, b, step)
+    return _LAND_MASK[step]
+
+
+def _is_land(lats, lons):
+    arr, b, step = land_mask()
+    r = np.clip(((b["north"] - lats) / step).astype(int), 0, arr.shape[0] - 1)
+    c = np.clip(((lons - b["west"]) / step).astype(int), 0, arr.shape[1] - 1)
+    return arr[r, c]
+
+
+def route_bow(a, rules, samples=36, tries=13):
+    """Pick how far a journey bends, by what it costs to fly it.
+
+    The straight line is only the cheapest route for a bird that does not
+    care what is underneath it. Bending the path is tried both ways and the
+    cheapest wins, where cost is distance with a surcharge for open water -
+    heavy for a soaring raptor, light for a goose. A long detour has to earn
+    itself, so length is charged too, which is what keeps an Iceland-to-
+    Scotland crossing straight instead of sending it round the Faroes.
+    """
+    lat0, lon0, lat1, lon1 = a[0], a[1], a[2], a[3]
+    t = np.linspace(0, 1, samples)
+    best, best_cost = 0.0, None
+    span = rules["bow"]
+    for bow in np.linspace(-span, span, tries):
+        mlat, mlon = (lat0 + lat1) / 2, (lon0 + lon1) / 2
+        dlat, dlon = lat1 - lat0, lon1 - lon0
+        # Control point pushed perpendicular to the straight line.
+        clat = mlat - dlon * bow
+        clon = mlon + dlat * bow
+        m = 1 - t
+        lats = m * m * lat0 + 2 * m * t * clat + t * t * lat1
+        lons = m * m * lon0 + 2 * m * t * clon + t * t * lon1
+        dx = np.diff(lons) * np.cos(np.radians((lats[:-1] + lats[1:]) / 2))
+        dy = np.diff(lats)
+        seg = np.hypot(dx, dy) * 111.0
+        over_water = ~_is_land((lats[:-1] + lats[1:]) / 2,
+                               (lons[:-1] + lons[1:]) / 2)
+        cost = float((seg * (1 + rules["sea"] * over_water)).sum())
+        if best_cost is None or cost < best_cost:
+            best, best_cost = float(bow), cost
+    return round(best, 3)
+
+
+# Species whose story is not in the default window.
+#
+# Waxwing is irruptive: it comes west in numbers some winters and barely at
+# all in others, and the difference is not subtle. Britain had 3,949 records
+# in the winter of 2023-24 and nineteen in 2024-25 - a two-hundred-fold swing
+# between consecutive years. Built on the default window the map is correct
+# and useless: a bird everyone remembers filling the rowans of the north-east
+# shows a single dot. The irruption winter is the one worth drawing, and the
+# frame carries its own dates, so nothing is misrepresented by using it.
+WINDOWS = {
+    "Bombycilla garrulus": ("2023-09-01", "2024-08-31"),
+}
+
+
+def window_for(sci, start, end):
+    """The window this species should be built on, which is usually the one
+    asked for."""
+    key = sci.split(" (")[0].strip()
+    for name, span in WINDOWS.items():
+        if key.lower().startswith(name.lower()):
+            return span
+    return start, end
+
 def _grid():
     b = AREA_BBOX
     rows = int((b["north"] - b["south"]) / DLAT) + 1
@@ -146,12 +294,59 @@ def _weekly_points(rows, weeks, first):
         at = buckets[w]
         if at.get(key, 0) < n:
             at[key] = n
+
+    filled = _carry_between_counts(buckets, weeks)
     out = []
-    for at in buckets:
+    for at in filled:
         flat = []
         for (lat, lon), n in at.items():
-            flat.extend((lat, lon, n))
+            flat.extend((lat, lon, round(n)))
         out.append(flat)
+    return out
+
+
+# A site that is counted, then not counted, then counted again has not
+# emptied in between. Gaps of up to this many weeks are filled; longer ones
+# are left alone, because beyond about a month the birds really may have
+# gone.
+MAX_CARRY_WEEKS = 5
+
+
+def _carry_between_counts(buckets, weeks):
+    """Fill the weeks in which a known site simply was not counted.
+
+    Across the 2024-25 winter the fifteen largest British Pink-footed Goose
+    sites were counted in a median of six weeks out of twenty-two. One site
+    holding twenty-four thousand birds was counted once. Treating an uncounted
+    week as an empty one makes those birds vanish and reappear, and the
+    transport model then invents journeys to explain it - which is a large
+    part of why the movement looked mechanical.
+
+    Between two counts at the same square the number is interpolated. Outside
+    them nothing is assumed: a site is not credited with birds before it was
+    first counted or after it was last, so arrival and departure stay the
+    data's business rather than this function's.
+    """
+    series = {}
+    for w, at in enumerate(buckets):
+        for key, n in at.items():
+            series.setdefault(key, []).append((w, n))
+
+    out = [dict(at) for at in buckets]
+    filled = 0
+    for key, seen in series.items():
+        seen.sort()
+        for (w0, n0), (w1, n1) in zip(seen, seen[1:]):
+            gap = w1 - w0
+            if gap < 2 or gap > MAX_CARRY_WEEKS:
+                continue
+            for w in range(w0 + 1, w1):
+                f = (w - w0) / gap
+                out[w][key] = n0 + (n1 - n0) * f
+                filled += 1
+    if filled:
+        log.info("filled %d site-weeks between counts (gaps up to %d weeks)",
+                 filled, MAX_CARRY_WEEKS)
     return out
 
 
@@ -189,6 +384,10 @@ def _weekly_surfaces(rows, g):
         n = cnt if isinstance(cnt, int) and cnt > 0 else 1
         if per_square[w].get(key, 0) < n:
             per_square[w][key] = n
+
+    # The same filling the points get: an uncounted week at a known site is
+    # not an empty one, and the flow model must not think it is.
+    per_square = _carry_between_counts(per_square, weeks)
 
     stack = np.zeros((len(weeks), g["rows"], g["cols"]))
     for w, squares in enumerate(per_square):
@@ -530,10 +729,15 @@ def build(species, out_path=None, start=None, end=None):
                        for w in range(len(weeks))])
 
     cells = _cell_places(rows, weeks, first, g)
+    group, rules = flight_rules(rows[0][4] or species)
     arcs, ns = [], []
     for w in range(len(weeks)):
         nxt = min(len(weeks) - 1, w + 1)
-        arcs.append(_arcs(smooth[w], smooth[nxt], g, cells[w], cells[nxt]))
+        wk = _arcs(smooth[w], smooth[nxt], g, cells[w], cells[nxt])
+        # Each journey gets the bend that is cheapest for this kind of bird.
+        for a_ in wk:
+            a_.append(route_bow(a_, rules))
+        arcs.append(wk)
         ns.append(np.round(norm[w], 4).ravel().tolist())
 
     moved = [sum(a[4] for a in wk) for wk in arcs]
@@ -557,6 +761,12 @@ def build(species, out_path=None, start=None, end=None):
 
     spots = _hotspots(rows)
     log.info("hotspots: %s", ", ".join(h["name"] for h in spots) or "none named")
+    bows = [a_[6] for wk in arcs for a_ in wk]
+    if bows:
+        import statistics
+        log.info("flight: %s, median bend %.2f, %d%% of journeys bent",
+                 group, statistics.median(abs(b_) for b_ in bows),
+                 round(100 * sum(1 for b_ in bows if abs(b_) > 0.02) / len(bows)))
 
     sci = rows[0][4] or species
     common = _english_name(sci) or species
@@ -569,13 +779,14 @@ def build(species, out_path=None, start=None, end=None):
         "times": [w.isoformat() for w in weeks],
         "n": ns,
         "arcs": arcs,
+        "flight": dict(rules, group=group),
         "hotspots": spots,
         "points": points,
         "weekBirds": [sum(wk[2::3]) for wk in points],
         "units": {
                   "points": "[lat, lon, birds] per reported square, per week",
                   "weekBirds": "birds counted that week, peak per square",
-                  "arcs": "[fromLat, fromLon, toLat, toLon, share, km] per week",
+                  "arcs": "[fromLat, fromLon, toLat, toLon, share, km, bow] per week",
                   "n": "reports per cell, smoothed, clipped at the "
                        f"{CLIP_PCT:g}th percentile of the year"},
         "method": "Each week normalised to a distribution, differenced against "
@@ -632,8 +843,11 @@ def main():
         conn.close()
         log.info("building %d species from the backfill", len(names))
     for name in names:
+        start, end = window_for(name, a.start, a.end)
+        if (start, end) != (a.start, a.end):
+            log.info("%s: using %s to %s instead", name, start, end)
         try:
-            build(name, start=a.start, end=a.end)
+            build(name, start=start, end=end)
         except SystemExit as e:
             log.error("%s: %s", name, e)
 

@@ -551,7 +551,7 @@ const EDGE_DEG = 3;
 function newBird(place) {
   return { lat: place.lat, lon: place.lon, flying: false,
            arriving: false, leaving: false, fade: 1,
-           fromLat: 0, fromLon: 0, toLat: 0, toLon: 0,
+           fromLat: 0, fromLon: 0, toLat: 0, toLon: 0, bow: 0, lane: 0,
            t0: 0, t1: 1, trail: [], jitter: Math.random() };
 }
 
@@ -619,8 +619,20 @@ function launch(w, midflight) {
       b.flying = true;
       b.fromLat = b.lat; b.fromLon = b.lon;
       b.toLat = a[2]; b.toLon = a[3];
+      /* The bend the builder costed for this kind of bird, and a lane across
+         the flight line so a departing flock reads as a skein rather than a
+         single file. Geese travel close together, a raptor alone. */
+      b.bow = a.length > 6 ? a[6] : 0;
+      b.lane = (Math.random() - 0.5) * (1 - (state.d.flight || {}).skein ?? 0.5);
       // Staggered departures; far journeys take longer than near ones.
-      b.t0 = w + (midflight ? -0.35 : 0.05) + b.jitter * 0.55;
+      /* Not smeared evenly across the week. Geese leave on a weather window,
+         thousands at once; a raptor trickles through for a month. The
+         species' own rule says how many pulses a week has, and birds sharing
+         a journey and a pulse leave together. */
+      const waves = Math.max(1, (state.d.flight || {}).waves || 3);
+      const pulse = Math.floor(b.jitter * waves) / waves;
+      b.t0 = w + (midflight ? -0.35 : 0.05) + pulse * 0.55
+             + ((b.jitter * 97) % 1) * 0.05;
       b.t1 = b.t0 + span;
       b.trail.length = 0;
     }
@@ -707,8 +719,19 @@ function updateFlock() {
     if (b.leaving && u >= 1) { gone = true; continue; }
     // Eased, so a departure looks like a bird leaving rather than a slide.
     const e = u * u * (3 - 2 * u);
-    b.lat = b.fromLat + (b.toLat - b.fromLat) * e;
-    b.lon = b.fromLon + (b.toLon - b.fromLon) * e;
+    /* A quadratic through the control point the builder chose, not a ruled
+       line between two dots. This is what the straightness was: the flock
+       rewrite interpolated from and to directly and threw the route away. */
+    const dLat = b.toLat - b.fromLat, dLon = b.toLon - b.fromLon;
+    const span = Math.hypot(dLat, dLon) || 1;
+    const cLat = (b.fromLat + b.toLat) / 2 - dLon * b.bow + dLon * b.lane * 0.12;
+    const cLon = (b.fromLon + b.toLon) / 2 + dLat * b.bow + dLat * b.lane * 0.12;
+    const m = 1 - e;
+    b.lat = m * m * b.fromLat + 2 * m * e * cLat + e * e * b.toLat;
+    b.lon = m * m * b.fromLon + 2 * m * e * cLon + e * e * b.toLon;
+    // A little across the line of flight, so a flock has width.
+    b.lat += (-dLon / span) * b.lane * 0.5;
+    b.lon += (dLat / span) * b.lane * 0.5;
     if (state.playing) {
       b.trail.push(b.lat, b.lon);
       if (b.trail.length > TRAIL * 2) b.trail.splice(0, 2);
@@ -1059,10 +1082,16 @@ async function loadSpecies(slug) {
   flock.birds = [];
   flock.week = -1;
   flock.placesByWeek.clear();
-  state.t = Math.min(state.t, state.weeks - 1);
+  /* Back to the start, and running. Picking a new bird mid-January and being
+     dropped into its January is disorienting: you asked to see its year. */
+  state.t = 0;
+  state.clock = 0;
+  state.playing = true;
   $('scrub').max = state.weeks - 1;
-  $('scrub').value = state.t;
-  $('when').textContent = d.times[Math.round(state.t)];
+  $('scrub').value = 0;
+  $('when').textContent = d.times[0];
+  const play = $('play');
+  if (play) play.textContent = 'Pause';
   const url = new URL(location);
   url.searchParams.set('species', slug);
   history.replaceState(null, '', url);
