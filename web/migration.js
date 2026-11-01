@@ -41,6 +41,19 @@ const YEAR_SECONDS = 40;
 const daysPerFrame = () => (state.weeks * 7) / (YEAR_SECONDS * 60);
 
 const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+
+/* Is this ring anywhere near what is on screen right now? Everything that
+   draws geography asks this, and asking it of a fixed bbox is what made the
+   map go black as soon as you panned off the opening view. */
+function visibleRings() {
+  const pad = 6;
+  const w = Math.min(lonAt(0), lonAt(state.w)) - pad;
+  const e = Math.max(lonAt(0), lonAt(state.w)) + pad;
+  const s = Math.min(latAt(0), latAt(state.h)) - pad;
+  const n = Math.max(latAt(0), latAt(state.h)) + pad;
+  return (r) => r.some(([lon, lat]) =>
+    lon > w && lon < e && lat > s && lat < n);
+}
 let MY0, MY1, px, py, lonAt, latAt;
 
 /* The map is vector all the way down - coastlines, reports, journeys and
@@ -86,14 +99,16 @@ function zoomAt(cx, cy, factor) {
   clampPan();
 }
 
-/* At k = 1 the map is exactly framed, so there is nothing to pan to; further
-   in, panning stops at the edge rather than letting the map drift off. */
+/* Pan anywhere. The old version pinned the map to the frame it opened in and
+   zeroed the offset outright at k = 1, so at the default zoom - which is
+   where most people arrive - the map could not be moved at all. The opening
+   bbox is a framing, not a fence. The only limit left stops the map being
+   flung so far that nothing is on screen to drag back. */
 function clampPan() {
-  const over = (view.k - 1);
-  const maxX = state.w * over, maxY = state.h * over;
-  view.tx = Math.min(0, Math.max(-maxX, view.tx));
-  view.ty = Math.min(0, Math.max(-maxY, view.ty));
-  if (view.k === 1) { view.tx = 0; view.ty = 0; }
+  const slack = 1.5;
+  const maxX = state.w * (view.k + slack), maxY = state.h * (view.k + slack);
+  view.tx = Math.max(-maxX, Math.min(maxX, view.tx));
+  view.ty = Math.max(-maxY, Math.min(maxY, view.ty));
 }
 
 function wireZoom(canvas) {
@@ -217,7 +232,8 @@ const BASEMAPS = {
 // rather than a black one, and a coastline dark enough to read on it.
 const pale = () => !!(BASEMAPS[state.basemap] || {}).pale;
 
-const tiles = { canvas: null, view: null, credit: '', dim: 1, token: 0 };
+const tiles = { canvas: null, view: null, credit: '', dim: 1, token: 0,
+                margin: { mx: 0, my: 0 } };
 let tileTimer = null;
 
 /* The backdrop - tiles, wash and coastline - only changes when the view does,
@@ -233,11 +249,14 @@ function queueLand() {
   landTimer = setTimeout(() => { land.view = null; }, 160);
 }
 
-function queueTiles() {
+function queueTiles(now) {
   clearTimeout(tileTimer);
   // Only once the map has settled: a tile request per frame of a drag would
-  // be rude to Esri and useless to us.
-  tileTimer = setTimeout(loadTiles, 180);
+  // be rude to Esri and useless to us. The first load does not wait, though -
+  // the page used to open on a black rectangle for a fifth of a second plus
+  // however long the network took.
+  if (now || !tiles.canvas) { loadTiles(); return; }
+  tileTimer = setTimeout(loadTiles, 140);
 }
 
 async function loadTiles() {
@@ -263,15 +282,25 @@ async function loadTiles() {
     return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n;
   };
 
-  const west = lonAt(0), east = lonAt(W), north = latAt(0), south = latAt(H);
-  const x0 = Math.max(0, Math.floor(xOf(west)) - 1);
-  const x1 = Math.min(n - 1, Math.ceil(xOf(east)));
-  const y0 = Math.max(0, Math.floor(yOf(north)) - 1);
-  const y1 = Math.min(n - 1, Math.ceil(yOf(south)));
-  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 400) return;   // never hammer the server
+  /* Fetched wider than the screen, so a drag has ground to move onto. With
+     the canvas cut to the viewport exactly, panning ran straight off the edge
+     of the imagery into black and then waited for a reload - which is what
+     the stair-stepped edges were. */
+  let mx = Math.round(W * 0.45), my = Math.round(H * 0.45);
+  let x0, x1, y0, y1;
+  for (;;) {
+    x0 = Math.max(0, Math.floor(xOf(lonAt(-mx))) - 1);
+    x1 = Math.min(n - 1, Math.ceil(xOf(lonAt(W + mx))));
+    y0 = Math.max(0, Math.floor(yOf(latAt(-my))) - 1);
+    y1 = Math.min(n - 1, Math.ceil(yOf(latAt(H + my))));
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) <= 420 || (!mx && !my)) break;
+    // Too many for one polite request: give up the margin before the view.
+    mx = 0; my = 0;
+  }
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 420) return;   // never hammer the server
 
   const c = document.createElement('canvas');
-  c.width = W; c.height = H;
+  c.width = W + mx * 2; c.height = H + my * 2;
   const g = c.getContext('2d');
   const jobs = [];
   for (let x = x0; x <= x1; x++) {
@@ -280,8 +309,8 @@ async function loadTiles() {
         const img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = () => {
-          const left = px(lonOf(x)), right = px(lonOf(x + 1));
-          const top = py(latOf(y)), bottom = py(latOf(y + 1));
+          const left = px(lonOf(x)) + mx, right = px(lonOf(x + 1)) + mx;
+          const top = py(latOf(y)) + my, bottom = py(latOf(y + 1)) + my;
           // +1px or hairline seams show between neighbouring tiles.
           g.drawImage(img, left, top, right - left + 1, bottom - top + 1);
           resolve();
@@ -296,6 +325,7 @@ async function loadTiles() {
   tiles.canvas = c;
   tiles.credit = spec.credit;
   tiles.dim = spec.dim;
+  tiles.margin = { mx, my };
   tiles.view = { k: view.k, tx: view.tx, ty: view.ty, w: W, h: H };
 }
 
@@ -351,9 +381,9 @@ function buildLand(key) {
 }
 
 function paintLand(ctx) {
-  const near = (r) => r.some(([lon, lat]) =>
-    lon > VIEW.west - 6 && lon < VIEW.east + 6
-    && lat > VIEW.south - 6 && lat < VIEW.north + 6);
+  // Against what is actually on screen, not against the bbox the map opened
+  // in - panning away from that left the coastline behind and the frame black.
+  const near = visibleRings();
   const ring = (r) => {
     ctx.beginPath();
     r.forEach(([lon, lat], i) => {
@@ -377,7 +407,9 @@ function paintLand(ctx) {
       ctx.translate(view.tx - tv.tx * f, view.ty - tv.ty * f);
       ctx.scale(f, f);
     }
-    ctx.drawImage(tiles.canvas, 0, 0, state.w, state.h);
+    const m = tiles.margin || { mx: 0, my: 0 };
+    ctx.drawImage(tiles.canvas, -m.mx, -m.my,
+                  state.w + m.mx * 2, state.h + m.my * 2);
     ctx.restore();
     // Dimming the tiles alone leaves a pale sea with plenty of contrast of
     // its own; the wash pushes the whole ground back so the birds are the
@@ -933,7 +965,7 @@ function resize() {
   state.ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
   setProjection(w, h);
   clampPan();
-  queueTiles(); queueLand();
+  queueTiles(true); queueLand();
 }
 
 async function loadSpecies(slug) {
@@ -1015,7 +1047,7 @@ async function boot() {
     document.body.classList.toggle('pale', pale());
     tiles.canvas = null;
     tiles.credit = '';
-    loadTiles();
+    queueTiles(true);
   };
   wireZoom($('c'));
   /* ?zoom=4&at=57.5,-3 frames a corner of the map, which is how you share
