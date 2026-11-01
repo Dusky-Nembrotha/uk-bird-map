@@ -37,7 +37,7 @@ const VIEW = { west: -25, east: 22, south: 49, north: 70 };
    first version had those two as separate constants, so the streaks flew at
    fourteen times the speed the dates were advancing and came out as straight
    lines ruled across the whole frame. */
-const YEAR_SECONDS = 40;
+let YEAR_SECONDS = 40;        // ?speed= divides this, for a quick look through
 const daysPerFrame = () => (state.weeks * 7) / (YEAR_SECONDS * 60);
 
 const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
@@ -533,10 +533,32 @@ function pickPlace(list) {
   return list[list.length - 1];
 }
 
+// How far beyond the frame an arriving bird starts, in degrees. Generous, so
+// it is off-screen at the opening zoom rather than popping in at the edge.
+const EDGE_DEG = 17;
+
 function newBird(place) {
   return { lat: place.lat, lon: place.lon, flying: false,
+           arriving: false, leaving: false, fade: 1,
            fromLat: 0, fromLon: 0, toLat: 0, toLon: 0,
            t0: 0, t1: 1, trail: [], jitter: Math.random() };
+}
+
+/* The way the population is moving this week, as a unit vector. Arrivals come
+   from the opposite side of it and departures continue along it, so the map
+   gains and loses birds in the direction the species is actually travelling.
+   With nothing to go on, assume southward - which is what autumn is for every
+   species here. */
+function weekBearing(w) {
+  const arcs = state.d.arcs[w] || [];
+  let dLat = 0, dLon = 0;
+  for (const a of arcs) {
+    dLat += (a[2] - a[0]) * a[4];
+    dLon += (a[3] - a[1]) * a[4];
+  }
+  const mag = Math.hypot(dLat, dLon);
+  if (mag < 1e-6) return [-1, 0];
+  return [dLat / mag, dLon / mag];
 }
 
 function seedFlock(w) {
@@ -601,24 +623,58 @@ function stepFlock(w) {
   const list = weekPlaces(w);
 
   for (const b of flock.birds) {
-    if (b.flying && state.t >= b.t1) {
+    if (b.flying && state.t >= b.t1 && !b.leaving) {
       b.flying = false;
+      b.arriving = false;
+      b.fade = 1;
       b.lat = b.toLat; b.lon = b.toLon;
       b.trail.length = 0;
     }
   }
   launch(w, false);
 
-  // Track the season's population in birds, not in places visited: the
-  // flock grows and shrinks with how many were actually counted.
+  /* Track the season's population in birds, not in places visited.
+
+     Arrivals and departures used to be a push and a splice: in the autumn
+     influx a hundred warblers appeared on the map out of nothing, standing
+     still, with no flight to account for them - which is exactly what it
+     looked like. A bird that was not here last week came from somewhere.
+     They now fly in from beyond the frame, against the week's prevailing
+     direction of travel, and leave the same way rather than blinking out. */
   const want = list.length ? wantBirds(w) : 0;
-  while (flock.birds.length > want) {
-    const i = flock.birds.findIndex((b) => !b.flying);
-    if (i < 0) break;
-    flock.birds.splice(i, 1);
+  const [uLat, uLon] = weekBearing(w);
+
+  const alive = flock.birds.filter((b) => !b.leaving);
+  let surplus = alive.length - want;
+  for (const b of alive) {
+    if (surplus <= 0) break;
+    if (b.flying) continue;
+    b.leaving = true;
+    b.flying = true;
+    b.fromLat = b.lat; b.fromLon = b.lon;
+    b.toLat = b.lat + uLat * EDGE_DEG;
+    b.toLon = b.lon + uLon * EDGE_DEG;
+    b.t0 = w + b.jitter * 0.4;
+    b.t1 = b.t0 + 0.75;
+    b.trail.length = 0;
+    surplus -= 1;
   }
-  while (flock.birds.length < want && list.length) {
-    flock.birds.push(newBird(pickPlace(list)));
+
+  let short = want - alive.length;
+  while (short > 0 && list.length) {
+    const place = pickPlace(list);
+    const b = newBird(place);
+    // In from off the edge, against the way the week is moving.
+    b.flying = true;
+    b.arriving = true;
+    b.fromLat = place.lat - uLat * EDGE_DEG;
+    b.fromLon = place.lon - uLon * EDGE_DEG;
+    b.toLat = place.lat; b.toLon = place.lon;
+    b.lat = b.fromLat; b.lon = b.fromLon;
+    b.t0 = w + b.jitter * 0.4;
+    b.t1 = b.t0 + 0.8;
+    flock.birds.push(b);
+    short -= 1;
   }
   flock.week = w;
 }
@@ -629,9 +685,15 @@ function updateFlock() {
     if (Math.abs(w - flock.week) > 1 || flock.week < 0) seedFlock(w);
     else stepFlock(w);
   }
+  let gone = false;
   for (const b of flock.birds) {
-    if (!b.flying) continue;
+    if (!b.flying) { b.fade = 1; continue; }
     const u = Math.max(0, Math.min(1, (state.t - b.t0) / (b.t1 - b.t0)));
+    // Faded rather than popped, so an arrival reads as coming into view and a
+    // departure as going out of it.
+    b.fade = b.arriving ? Math.min(1, u / 0.3)
+           : b.leaving ? Math.max(0, 1 - u / 0.8) : 1;
+    if (b.leaving && u >= 1) { gone = true; continue; }
     // Eased, so a departure looks like a bird leaving rather than a slide.
     const e = u * u * (3 - 2 * u);
     b.lat = b.fromLat + (b.toLat - b.fromLat) * e;
@@ -641,6 +703,7 @@ function updateFlock() {
       if (b.trail.length > TRAIL * 2) b.trail.splice(0, 2);
     }
   }
+  if (gone) flock.birds = flock.birds.filter((b) => !(b.leaving && state.t >= b.t1));
 }
 
 /* One sprite, drawn once and blitted per bird. Building a radial gradient
@@ -711,9 +774,11 @@ function drawFlock(ctx) {
   }
 
   // Every bird the same mark, flying or not.
+  ctx.globalAlpha = 1;
   for (const b of flock.birds) {
     const x = px(b.lon), y = py(b.lat);
     if (x < -R || y < -R || x > state.w + R || y > state.h + R) continue;
+    ctx.globalAlpha = b.fade;
     ctx.drawImage(img, x - R, y - R, R * 2, R * 2);
     if (perf.on) perf.dots++;
   }
@@ -1049,6 +1114,8 @@ async function boot() {
   // ground along with everything else drawn there.
   document.body.classList.toggle('pale', pale());
   perf.on = q.get('fps') === '1';
+  const speed = Number(q.get('speed'));
+  if (speed > 0 && speed <= 60) YEAR_SECONDS = 40 / speed;
   $('more').onclick = () => document.body.classList.toggle('more');
   $('basemap').onchange = (e) => {
     state.basemap = e.target.value;
