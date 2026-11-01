@@ -166,15 +166,37 @@ def _weekly_surfaces(rows, g):
         weeks.append(d)
         d += timedelta(days=7)
 
-    stack = np.zeros((len(weeks), g["rows"], g["cols"]))
+    # Birds, not reports.
+    #
+    # This counted one per record, which is a count of birders. In September
+    # Britain generates a great many records while holding relatively few of
+    # these geese, while Denmark and Norway generate far fewer as the Svalbard
+    # birds pour in. Normalising records to a distribution therefore showed
+    # Britain losing share and Denmark gaining it, and the transport
+    # obligingly joined the two: half of all modelled autumn movement ran
+    # Britain to Denmark and Norway, which is backwards, and is what the
+    # flyway check caught.
+    #
+    # Counts are on most records. Within a square and a week the largest wins
+    # rather than the sum, exactly as the points do - ten birders logging one
+    # flock of two thousand saw two thousand birds, not twenty thousand.
+    per_square = [dict() for _ in weeks]
     for (iso, lat, lon, cnt, _sci, _com, _loc), day in zip(rows, days):
         w = (day - first).days // 7
-        r = int(round((lat - g["lat0"]) / g["dlat"]))
-        c = int(round((lon - g["lon0"]) / g["dlon"]))
-        if 0 <= w < len(weeks) and 0 <= r < g["rows"] and 0 <= c < g["cols"]:
-            # A report, not a headcount. Flock sizes span four orders of
-            # magnitude and would otherwise let one count stand in for a county.
-            stack[w, r, c] += 1.0
+        if not (0 <= w < len(weeks)):
+            continue
+        key = (round(lat, 2), round(lon, 2))
+        n = cnt if isinstance(cnt, int) and cnt > 0 else 1
+        if per_square[w].get(key, 0) < n:
+            per_square[w][key] = n
+
+    stack = np.zeros((len(weeks), g["rows"], g["cols"]))
+    for w, squares in enumerate(per_square):
+        for (lat, lon), n in squares.items():
+            r = int(round((lat - g["lat0"]) / g["dlat"]))
+            c = int(round((lon - g["lon0"]) / g["dlon"]))
+            if 0 <= r < g["rows"] and 0 <= c < g["cols"]:
+                stack[w, r, c] += n
     for w in range(len(weeks)):
         stack[w] = _blur(stack[w], SMOOTH_RADIUS, SMOOTH_PASSES)
     return weeks, stack
