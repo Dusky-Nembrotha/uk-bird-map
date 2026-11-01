@@ -110,7 +110,7 @@ function wireZoom(canvas) {
     zoomAt(x, y, Math.exp(-e.deltaY * 0.0015));
     updateZoomUi();
     queueTiles();
-    queueReports(); queueLand();
+    queueLand();
   }, { passive: false });
 
   /* Pointer events cover mouse and touch together, so one finger pans and two
@@ -168,7 +168,7 @@ function wireZoom(canvas) {
     if (live.size === 0) {
       drag = null;
       canvas.style.cursor = view.k > 1 ? 'grab' : 'default';
-      queueTiles(); queueLand(); queueReports();
+      queueTiles(); queueLand();
     }
   };
   canvas.addEventListener('pointerup', end);
@@ -178,7 +178,7 @@ function wireZoom(canvas) {
     zoomAt(x, y, e.shiftKey ? 1 / 1.8 : 1.8);
     updateZoomUi();
     queueTiles();
-    queueReports(); queueLand();
+    queueLand();
   });
 }
 
@@ -416,246 +416,232 @@ function paintLand(ctx) {
    zooming do move the dots; it holds three layers, which is the pair being
    cross-faded plus the one about to be needed. */
 
-const reportCache = new Map();
-let reportKey = '';
+/* ----------------------------------------------------------- the flock
 
-function viewKey() {
-  return [state.w, state.h, view.k.toFixed(3), Math.round(view.tx),
-          Math.round(view.ty), state.basemap].join(':');
-}
+   One population, not two layers.
 
-/* Cleared when the map settles, not while it is moving. Keying the cache on
-   the live view and rebuilding on mismatch would have rebuilt every layer on
-   every frame of a drag - worse than the per-frame drawing it replaced. */
-function queueReports() {
-  reportCache.clear();
-  reportKey = '';
-}
+   Until now a sighting was a glowing blob and a movement was a comet, drawn
+   by different code in different shapes, and it read as a particle effect
+   laid over a dot map - which is what it was. A bird that is sitting still
+   and a bird that is flying are the same bird. So there is now a single
+   flock of individuals: each one is the same mark, and the only difference
+   between them is whether it is moving and therefore trailing.
 
-function reportLayer(w) {
-  if (!reportKey) reportKey = viewKey();
-  const hit = reportCache.get(w);
+   They are inferred, and the frame says so. The reports tell us where the
+   birds were each week; the weekly shift tells us how many went from where
+   to where. Which particular bird made which journey is interpretation
+   filling the gap between two sightings - the same liberty the reference
+   takes, and worth stating rather than implying. */
+
+const FLOCK_MAX = 900;
+const TRAIL = 22;                 // positions kept
+// How long the tail is allowed to look, in screen pixels. A bird crossing
+// eight hundred kilometres in twenty frames leaves forty kilometres between
+// one position and the next, and drawing all of them put white beams across
+// the whole map. The tail is walked back from the head until this is spent.
+const TAIL_PX = 42;
+const WEEK_SECONDS = () => (YEAR_SECONDS / Math.max(1, state.weeks));
+
+const flock = { birds: [], week: -1, placesByWeek: new Map() };
+
+/* One entry per distinct square reported that week, with how often. Cached
+   on the data rather than the view, so panning does not recompute it. */
+function weekPlaces(w) {
+  const hit = flock.placesByWeek.get(w);
   if (hit) return hit;
-
-  const arr = state.d.points[w] || [];
-  const c = document.createElement('canvas');
-  c.width = Math.round(state.w * state.dpr);
-  c.height = Math.round(state.h * state.dpr);
-  const g = c.getContext('2d');
-  g.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
-
-  /* One mark per place, not per report.
-
-     A report is a birder, not a bird. Yellow-browed Warbler is scarce here
-     and draws a crowd: in the week of 23 September 2024 its 1,431 reports
-     came from 537 places, and one square was logged 117 times - a single
-     celebrated bird, drawn as a hundred and seventeen stacked glows that
-     saturated into a floodlight. Flamborough Head carries 208 reports across
-     the year. Collapsing to distinct squares is the difference between
-     mapping the birds and mapping the twitch.
-
-     How often a place was reported still shows, but through a square root
-     and a cap, so a famous bird is a slightly larger mark rather than a
-     small sun. */
-  const places = new Map();
+  const arr = (state.d.points[w] || []);
+  const seen = new Map();
   for (let k = 0; k < arr.length; k += 2) {
     const key = arr[k] + ',' + arr[k + 1];
-    const at = places.get(key);
-    if (at) at.n += 1;
-    else places.set(key, { lat: arr[k], lon: arr[k + 1], n: 1 });
+    const at_ = seen.get(key);
+    if (at_) at_.n += 1;
+    else seen.set(key, { lat: arr[k], lon: arr[k + 1], n: 1 });
   }
+  const list = [...seen.values()];
+  flock.placesByWeek.set(w, list);
+  return list;
+}
 
-  g.globalCompositeOperation = pale() ? 'source-over' : 'lighter';
+function pickPlace(list) {
+  // Weighted by how often the place was reported, so birds sit where birds
+  // were seen rather than spread evenly over the map.
+  let total = 0;
+  for (const p of list) total += p.n;
+  let r = Math.random() * total;
+  for (const p of list) { r -= p.n; if (r <= 0) return p; }
+  return list[list.length - 1];
+}
+
+function newBird(place) {
+  return { lat: place.lat, lon: place.lon, flying: false,
+           fromLat: 0, fromLon: 0, toLat: 0, toLon: 0,
+           t0: 0, t1: 1, trail: [], jitter: Math.random() };
+}
+
+function seedFlock(w) {
+  flock.birds = [];
+  const list = weekPlaces(w);
+  if (!list.length) { flock.week = w; return; }
+  const want = Math.min(FLOCK_MAX, Math.max(12, Math.round(list.length * 1.1)));
+  for (let i = 0; i < want; i++) flock.birds.push(newBird(pickPlace(list)));
+  flock.week = w;
+  /* Launch this week's journeys already in progress. Scrubbing to the peak
+     of the autumn should show birds in the air, not a frozen field waiting
+     for the next week boundary to come round. */
+  launch(w, true);
+}
+
+/* Send the birds this week's arcs call for. `midflight` spreads departures
+   backwards as well as forwards, so a week entered by scrubbing is already
+   under way rather than about to begin. */
+function launch(w, midflight) {
+  const arcs = state.d.arcs[w] || [];
+  const perched = flock.birds.filter((b) => !b.flying);
+  for (const a of arcs) {
+    const n = Math.max(1, Math.round(a[4] * FLOCK_MAX));
+    // The perched birds nearest this journey's start are the ones that make
+    // it, so a departure comes out of the flock standing there.
+    perched.sort((x, y) => (
+      ((x.lat - a[0]) ** 2 + (x.lon - a[1]) ** 2)
+      - ((y.lat - a[0]) ** 2 + (y.lon - a[1]) ** 2)));
+    for (let i = 0; i < n && perched.length; i++) {
+      const b = perched.shift();
+      const km = a[5] || 400;
+      const span = Math.min(0.9, 0.12 + km / 3000);
+      b.flying = true;
+      b.fromLat = b.lat; b.fromLon = b.lon;
+      b.toLat = a[2]; b.toLon = a[3];
+      // Staggered departures; far journeys take longer than near ones.
+      b.t0 = w + (midflight ? -0.35 : 0.05) + b.jitter * 0.55;
+      b.t1 = b.t0 + span;
+      b.trail.length = 0;
+    }
+  }
+}
+
+/* At each week boundary: settle the arrivals, send the departures the arcs
+   call for, and let the population follow the season - a bird leaving the
+   window in spring has to be able to leave. */
+function stepFlock(w) {
+  const list = weekPlaces(w);
+
+  for (const b of flock.birds) {
+    if (b.flying && state.t >= b.t1) {
+      b.flying = false;
+      b.lat = b.toLat; b.lon = b.toLon;
+      b.trail.length = 0;
+    }
+  }
+  launch(w, false);
+
+  // Track the season's population: birds arrive in autumn and are gone by
+  // summer, which is the whole shape of the year for most of these species.
+  const want = list.length
+    ? Math.min(FLOCK_MAX, Math.max(0, Math.round(list.length * 1.1))) : 0;
+  while (flock.birds.length > want) {
+    const i = flock.birds.findIndex((b) => !b.flying);
+    if (i < 0) break;
+    flock.birds.splice(i, 1);
+  }
+  while (flock.birds.length < want && list.length) {
+    flock.birds.push(newBird(pickPlace(list)));
+  }
+  flock.week = w;
+}
+
+function updateFlock() {
+  const w = Math.max(0, Math.min(state.d.arcs.length - 1, Math.floor(state.t)));
+  if (w !== flock.week) {
+    if (Math.abs(w - flock.week) > 1 || flock.week < 0) seedFlock(w);
+    else stepFlock(w);
+  }
+  for (const b of flock.birds) {
+    if (!b.flying) continue;
+    const u = Math.max(0, Math.min(1, (state.t - b.t0) / (b.t1 - b.t0)));
+    // Eased, so a departure looks like a bird leaving rather than a slide.
+    const e = u * u * (3 - 2 * u);
+    b.lat = b.fromLat + (b.toLat - b.fromLat) * e;
+    b.lon = b.fromLon + (b.toLon - b.fromLon) * e;
+    if (state.playing) {
+      b.trail.push(b.lat, b.lon);
+      if (b.trail.length > TRAIL * 2) b.trail.splice(0, 2);
+    }
+  }
+}
+
+/* One sprite, drawn once and blitted per bird. Building a radial gradient
+   per bird per frame is what crashed the page the first time. */
+let birdSprite = null, birdSpriteKey = '';
+function sprite() {
+  const key = `${pale()}:${state.dpr}`;
+  if (birdSprite && birdSpriteKey === key) return birdSprite;
+  const R = 6;
+  const c = document.createElement('canvas');
+  c.width = c.height = R * 2 * state.dpr;
+  const g = c.getContext('2d');
+  g.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
   const halo = pale() ? '20, 60, 110' : '214, 232, 252';
-  const core = pale() ? '12, 48, 92' : '240, 248, 255';
-  for (const pt of places.values()) {
-    const x = px(pt.lon), y = py(pt.lat);
-    if (x < -20 || y < -20 || x > state.w + 20 || y > state.h + 20) continue;
-    // 1 report -> 1.0, 16 -> 2.0, 100+ -> capped at 2.6.
-    const w8 = Math.min(2.6, Math.sqrt(Math.sqrt(pt.n)) );
-    const R = 4.2 * w8;
-    const rg = g.createRadialGradient(x, y, 0, x, y, R);
-    rg.addColorStop(0, `rgba(${halo}, ${pale() ? 0.16 : 0.26})`);
-    rg.addColorStop(1, `rgba(${halo}, 0)`);
-    g.fillStyle = rg;
-    g.beginPath(); g.arc(x, y, R, 0, Math.PI * 2); g.fill();
-    g.fillStyle = `rgba(${core}, ${pale() ? 0.85 : 0.95})`;
-    g.beginPath(); g.arc(x, y, 1.15 + 0.6 * w8, 0, Math.PI * 2); g.fill();
-  }
-
-  c._view = { k: view.k, tx: view.tx, ty: view.ty };
-  reportCache.set(w, c);
-  if (reportCache.size > 3) reportCache.delete(reportCache.keys().next().value);
+  const core = pale() ? '12, 48, 92' : '244, 250, 255';
+  const rg = g.createRadialGradient(R, R, 0, R, R, R);
+  // Enough bloom to seat a bird on the imagery, not enough that a roost of
+  // forty merges into one lamp. Crisp cores are what let a crowd still read
+  // as a crowd of individuals.
+  rg.addColorStop(0, `rgba(${halo}, ${pale() ? 0.14 : 0.17})`);
+  rg.addColorStop(1, `rgba(${halo}, 0)`);
+  g.fillStyle = rg;
+  g.beginPath(); g.arc(R, R, R, 0, Math.PI * 2); g.fill();
+  g.fillStyle = `rgba(${core}, ${pale() ? 0.90 : 0.95})`;
+  g.beginPath(); g.arc(R, R, 1.05, 0, Math.PI * 2); g.fill();
+  birdSprite = c; birdSpriteKey = key;
   return c;
 }
 
-function drawReports(ctx, t) {
-  /* Two consecutive weeks are cross-faded so a report does not blink out on a
-     week boundary - the data is weekly, the eye is not. */
-  const d = state.d;
-  const i = Math.max(0, Math.min(d.points.length - 1, Math.floor(t)));
-  const j = Math.min(d.points.length - 1, i + 1);
-  const f = t - i;
+function drawFlock(ctx) {
+  updateFlock();
+  const img = sprite();
+  const R = 6;
   ctx.save();
   ctx.globalCompositeOperation = pale() ? 'multiply' : 'lighter';
-  const blit = (layer, alpha) => {
-    if (alpha <= 0.01) return;
-    ctx.save();
-    const lv = layer._view;
-    // Mid-gesture the layer holds pixels for where the map used to be, so it
-    // is shifted and scaled onto where we are now - the same trick the tiles
-    // use, and the reason a drag stays smooth without a rebuild.
-    if (lv && (lv.k !== view.k || lv.tx !== view.tx || lv.ty !== view.ty)) {
-      const scale = view.k / lv.k;
-      ctx.translate(view.tx - lv.tx * scale, view.ty - lv.ty * scale);
-      ctx.scale(scale, scale);
-    }
-    ctx.globalAlpha = alpha;
-    ctx.drawImage(layer, 0, 0, state.w, state.h);
-    ctx.restore();
-  };
-  blit(reportLayer(i), 1 - f);
-  blit(reportLayer(j), f);
-  ctx.restore();
-  if (perf.on) perf.dots += 2;
-}
 
-const TRAIL = 14;          // positions kept per particle
-
-/* The journeys.
-
-   This replaces a dense velocity field, which was the wrong instrument and
-   looked it: particles released into a smooth field drift about like weather,
-   wander out over open ocean, and keep moving in midwinter when the birds are
-   standing in a Norfolk field. A goose does not diffuse. It sits still for
-   months and then flies a long way to somewhere specific.
-
-   So nothing moves except along an inferred journey - from a place that lost
-   birds to a place that gained them - and in the thirty-four weeks of the year
-   where no movement clears the noise, nothing moves at all. */
-
-const COMET = 0.085;        // trail length, as a fraction of the journey
-const SPEED = 0.26;         // journeys per second
-
-function arcPath(a) {
-  const x0 = px(a[1]), y0 = py(a[0]), x1 = px(a[3]), y1 = py(a[2]);
-  // Bowed a little, so two journeys between the same pair of places do not
-  // land on top of each other and the line reads as a flight rather than a
-  // ruled connector.
-  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-  const dx = x1 - x0, dy = y1 - y0;
-  const len = Math.hypot(dx, dy) || 1;
-  const cx = mx - dy / len * len * 0.11;
-  const cy = my + dx / len * len * 0.11;
-  return { x0, y0, x1, y1, cx, cy, len };
-}
-
-const at = (q, t) => {
-  const m = 1 - t;
-  return [m * m * q.x0 + 2 * m * t * q.cx + t * t * q.x1,
-          m * m * q.y0 + 2 * m * t * q.cy + t * t * q.y1];
-};
-
-/* How many comet segments the whole frame may spend.
-
-   The budget is generous because, once batched, a segment costs two Path2D
-   calls and nothing else - what was killing the page was three thousand
-   separate beginPath/stroke pairs, not the number of lines. Capping it hard
-   thinned the streams for no gain; this keeps the density and still bounds
-   the worst week. */
-const SEG_BUDGET = 4200;
-const ALPHA_STEPS = 6;          // batching granularity, not a visible step
-
-/* Comets per unit of population moved.
-
-   The count used to be scaled against the busiest journey of whatever week
-   was showing, so a week in which almost nothing moved put as many birds in
-   the air as the peak of the spring departure. The number flying now follows
-   the absolute share of the population on the move: at this scale the
-   busiest week of the year carries a couple of hundred, and a quiet one
-   carries a handful, which is the point of watching it. */
-const COMET_SCALE = 3600;
-const COMET_MAX = 14;
-// The share at which a journey is drawn at full strength.
-const FULL_SHARE = 0.004;
-
-function drawJourneys(ctx, now) {
-  const d = state.d;
-  const i = Math.max(0, Math.min(d.arcs.length - 1, Math.floor(state.t)));
-  const j = Math.min(d.arcs.length - 1, i + 1);
-  const f = state.t - i;
-
-  ctx.save();
-  /* The blend has to turn over with the ground, not just the colour. On a
-     dark map the marks are added, so overlapping reports pile up into light
-     and density reads as brightness. Painting dark ink additively onto a
-     white basemap adds nothing at all - which is why the data disappeared
-     rather than merely dimmed. Multiply is the same idea the other way up:
-     overlap darkens, and a crowded estuary still shows as crowded. */
-  ctx.globalCompositeOperation = pale() ? 'multiply' : 'lighter';
-  ctx.lineCap = 'round';
-
-  /* Segments are collected into a path per (taper, alpha) bucket and stroked
-     once each - a couple of dozen stroke calls a frame instead of thousands.
-     Quantising alpha to six steps is invisible on a moving comet and is what
-     makes the batching possible at all. */
-  const batches = new Map();
-  const add = (seg, alpha, p1, p2) => {
-    const bucket = Math.max(1, Math.round(alpha * ALPHA_STEPS));
-    const key = seg * 16 + bucket;
-    let path = batches.get(key);
-    if (!path) batches.set(key, (path = new Path2D()));
-    path.moveTo(p1[0], p1[1]);
-    path.lineTo(p2[0], p2[1]);
-  };
-
-  // Only a ceiling now, not the thing that decides the count.
-  const moving = [...(d.arcs[i] || []), ...(d.arcs[j] || [])]
-    .reduce((m, a) => m + a[4], 0);
-  const squeeze = Math.min(1, SEG_BUDGET / Math.max(1, moving * COMET_SCALE * 5));
-
-  const fly = (list, fade) => {
-    if (fade <= 0.02) return;
-    list.forEach((a, k) => {
-      const q = arcPath(a);
-      if (q.len < 2) return;
-      /* The trail is a fraction of the journey, which at six times zoom makes
-         a journey six times longer on screen and the comets into rain. Bound
-         it in pixels as well, so a bird stays a bird however far in you go. */
-      const comet = Math.min(COMET, 70 / q.len);
-      /* How much of the population this journey carries, against a fixed
-         reference rather than against the busiest journey on screen - the
-         latter is what made every week look equally busy. */
-      const weight = Math.min(1, a[4] / FULL_SHARE);
-      const n = Math.min(COMET_MAX, Math.round(a[4] * COMET_SCALE * squeeze));
-      if (n < 1) return;
-      for (let b = 0; b < n; b++) {
-        const phase = (now * SPEED + k * 0.37 + b / n) % 1;
-        const head = at(q, phase);
-        const alpha = fade * (0.25 + 0.6 * weight)
-          * Math.min(1, phase / 0.08) * Math.min(1, (1 - phase) / 0.12);
-        for (let seg = 0; seg < 5; seg++) {
-          const t1 = phase - (seg / 5) * comet;
-          const t2 = phase - ((seg + 1) / 5) * comet;
-          if (t2 < 0) break;
-          const p1 = seg === 0 ? head : at(q, t1), p2 = at(q, t2);
-          add(seg, alpha * (1 - seg / 5), p1, p2);
-          if (perf.on) perf.grads++;
-        }
-      }
-    });
-  };
-
-  fly(d.arcs[i], 1 - f);
-  fly(d.arcs[j], f);
-
+  // Tails first, so a bird sits on the head of its own trail.
   const rgb = pale() ? '20, 70, 125' : '226, 240, 255';
-  for (const [key, path] of batches) {
-    const seg = Math.floor(key / 16), bucket = key % 16;
-    ctx.strokeStyle = `rgba(${rgb}, ${bucket / ALPHA_STEPS})`;
-    ctx.lineWidth = 1.6 - seg * 0.22;
+  const batches = new Map();
+  for (const b of flock.birds) {
+    if (!b.flying || b.trail.length < 4) continue;
+    let spent = 0;
+    let hx = px(b.trail[b.trail.length - 1]), hy = py(b.trail[b.trail.length - 2]);
+    for (let i = b.trail.length - 4; i >= 0 && spent < TAIL_PX; i -= 2) {
+      const nx = px(b.trail[i + 1]), ny = py(b.trail[i]);
+      const d = Math.hypot(nx - hx, ny - hy) || 0.001;
+      // Clip the final segment so the tail ends exactly where its length runs
+      // out, rather than overshooting by however far the last frame carried.
+      const room = TAIL_PX - spent;
+      const cut = d > room ? room / d : 1;
+      const ex = hx + (nx - hx) * cut, ey = hy + (ny - hy) * cut;
+      const f = 1 - spent / TAIL_PX;
+      const bucket = Math.max(1, Math.round(f * 5));
+      let path = batches.get(bucket);
+      if (!path) batches.set(bucket, (path = new Path2D()));
+      path.moveTo(hx, hy);
+      path.lineTo(ex, ey);
+      spent += d;
+      hx = nx; hy = ny;
+    }
+  }
+  for (const [bucket, path] of batches) {
+    ctx.strokeStyle = `rgba(${rgb}, ${0.05 + 0.09 * bucket})`;
+    ctx.lineWidth = 0.4 + 0.2 * bucket;
+    ctx.lineCap = 'round';
     ctx.stroke(path);
     if (perf.on) perf.strokes++;
+  }
+
+  // Every bird the same mark, flying or not.
+  for (const b of flock.birds) {
+    const x = px(b.lon), y = py(b.lat);
+    if (x < -R || y < -R || x > state.w + R || y > state.h + R) continue;
+    ctx.drawImage(img, x - R, y - R, R * 2, R * 2);
+    if (perf.on) perf.dots++;
   }
   ctx.restore();
 }
@@ -817,11 +803,11 @@ function drawHud(ctx, t) {
   /* The bar is a fixed number of real pixels tall, so the footer has to be
      too - scaling it with the frame tucked it under the controls on a phone. */
   const foot = Math.max(118, 150 * S);
-  ctx.fillText('One mark per place · larger where reported more often',
-               pad, state.h - foot);
+  ctx.fillText('Each point is one bird', pad, state.h - foot);
   ctx.fillStyle = C.secondary;
   ctx.font = `500 ${Math.round(16 * S)}px system-ui, sans-serif`;
-  ctx.fillText('Lines: modelled movement, not tracked birds', pad, state.h - foot + 26 * S);
+  ctx.fillText('Positions between sightings are inferred, not tracked',
+               pad, state.h - foot + 26 * S);
   ctx.fillStyle = C.muted;
   ctx.font = `500 ${Math.round(13 * S)}px system-ui, sans-serif`;
   ctx.fillText(`${d.species.sci} · ${d.records.toLocaleString('en-GB')} reports · `
@@ -845,8 +831,7 @@ function frame(now) {
   const ctx = state.ctx;
 
   drawLand(ctx);
-  drawReports(ctx, state.t);
-  drawJourneys(ctx, state.clock);
+  drawFlock(ctx);
   drawHotspots(ctx);
   drawHud(ctx, state.t);
 
@@ -873,8 +858,9 @@ function frame(now) {
       // where virtual time pins performance.now() to zero.
       const segs = perf.grads / Math.max(1, perf.n);
       const calls = perf.strokes / Math.max(1, perf.n);
+      const flying = flock.birds.filter((b) => b.flying).length;
       $('zoom').textContent =
-        `${per.toFixed(0)} blits · ${segs.toFixed(0)} segs in ${calls.toFixed(0)} strokes`;
+        `w${flock.week} · ${flock.birds.length} birds, ${flying} flying · ${calls.toFixed(0)} strokes`;
       perf.sum = 0; perf.n = 0; perf.dots = 0; perf.grads = 0; perf.strokes = 0; perf.t0 = now;
     }
   }
@@ -907,7 +893,7 @@ function resize() {
   state.ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
   setProjection(w, h);
   clampPan();
-  queueTiles(); queueLand(); queueReports();
+  queueTiles(); queueLand();
 }
 
 async function loadSpecies(slug) {
@@ -961,6 +947,9 @@ async function boot() {
     state.playing = false;
   }
   if (q.get('play') === '0') state.playing = false;
+  // ?week=N&play=1 holds a moment and keeps it running, which is the only way
+  // to see a given week's migration without waiting for the clip to reach it.
+  if (q.get('play') === '1') state.playing = true;
 
   resize();
   window.addEventListener('resize', resize);
