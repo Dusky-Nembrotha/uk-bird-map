@@ -449,17 +449,38 @@ const flock = { birds: [], week: -1, placesByWeek: new Map() };
 function weekPlaces(w) {
   const hit = flock.placesByWeek.get(w);
   if (hit) return hit;
+  // [lat, lon, birds] per reported square - birds now, not reports.
   const arr = (state.d.points[w] || []);
-  const seen = new Map();
-  for (let k = 0; k < arr.length; k += 2) {
-    const key = arr[k] + ',' + arr[k + 1];
-    const at_ = seen.get(key);
-    if (at_) at_.n += 1;
-    else seen.set(key, { lat: arr[k], lon: arr[k + 1], n: 1 });
+  const list = [];
+  for (let k = 0; k < arr.length; k += 3) {
+    list.push({ lat: arr[k], lon: arr[k + 1], n: arr[k + 2] });
   }
-  const list = [...seen.values()];
   flock.placesByWeek.set(w, list);
   return list;
+}
+
+/* How many points a week's birds are worth.
+
+   One scale for every species, not one per species - scaling each to its own
+   peak made Yellow-browed Warbler, of which Europe's best week held 1,126,
+   busier on screen than Barnacle Goose, of which it held 2.4 million. That is
+   the opposite of the truth.
+
+   Linear across that range is impossible: at the goose's scale the warbler is
+   less than half a point. The count is therefore compressed by a square root,
+   the same way a proportional-symbol map scales a circle's radius, against a
+   peak shared by all species. Barnacle Goose fills the map at 900 points,
+   Pink-footed Goose reaches 314, Bewick's Swan 52, the warbler 20 - ordered
+   as they should be and all of them legible.
+
+   The compression is an indicator, so the exact figure is on the frame beside
+   the date, where it is not compressed at all. */
+function wantBirds(w) {
+  const birds = (state.d.weekBirds || [])[w] || 0;
+  if (!birds) return 0;
+  const peak = state.peakBirds || Math.max(1, ...(state.d.weekBirds || [1]));
+  return Math.min(FLOCK_MAX,
+                  Math.max(1, Math.round(FLOCK_MAX * Math.sqrt(birds / peak))));
 }
 
 function pickPlace(list) {
@@ -482,7 +503,7 @@ function seedFlock(w) {
   flock.birds = [];
   const list = weekPlaces(w);
   if (!list.length) { flock.week = w; return; }
-  const want = Math.min(FLOCK_MAX, Math.max(12, Math.round(list.length * 1.1)));
+  const want = wantBirds(w);
   for (let i = 0; i < want; i++) flock.birds.push(newBird(pickPlace(list)));
   flock.week = w;
   /* Launch this week's journeys already in progress. Scrubbing to the peak
@@ -497,8 +518,22 @@ function seedFlock(w) {
 function launch(w, midflight) {
   const arcs = state.d.arcs[w] || [];
   const perched = flock.birds.filter((b) => !b.flying);
-  for (const a of arcs) {
-    const n = Math.max(1, Math.round(a[4] * FLOCK_MAX));
+
+  /* How many birds move is a share of the flock that exists, not of the cap.
+     Scaled to the cap, a scarce species whose whole flock is twenty birds had
+     every one of them launched at once - two hundred journeys each demanding
+     at least one bird from a flock of twenty. The budget is the share of the
+     population on the move, spent on the largest journeys first. */
+  const totalShare = arcs.reduce((m, x) => m + x[4], 0) || 1e-9;
+  let budget = Math.round(totalShare * flock.birds.length);
+  const order = [...arcs].sort((x, y) => y[4] - x[4]);
+  const planned = Math.max(1, budget);
+
+  for (const a of order) {
+    if (budget <= 0) break;
+    const n = Math.min(budget,
+                       Math.max(1, Math.round((a[4] / totalShare) * planned)));
+    budget -= n;
     // The perched birds nearest this journey's start are the ones that make
     // it, so a departure comes out of the flock standing there.
     perched.sort((x, y) => (
@@ -534,10 +569,9 @@ function stepFlock(w) {
   }
   launch(w, false);
 
-  // Track the season's population: birds arrive in autumn and are gone by
-  // summer, which is the whole shape of the year for most of these species.
-  const want = list.length
-    ? Math.min(FLOCK_MAX, Math.max(0, Math.round(list.length * 1.1))) : 0;
+  // Track the season's population in birds, not in places visited: the
+  // flock grows and shrinks with how many were actually counted.
+  const want = list.length ? wantBirds(w) : 0;
   while (flock.birds.length > want) {
     const i = flock.birds.findIndex((b) => !b.flying);
     if (i < 0) break;
@@ -779,8 +813,13 @@ function drawHud(ctx, t) {
   ctx.fillText(when.toLocaleDateString('en-GB',
     { day: 'numeric', month: 'short' }).toUpperCase(), W - pad, 252 * S);
 
+  const birds = (d.weekBirds || [])[i] || 0;
+  ctx.fillStyle = C.secondary;
+  ctx.font = `600 ${Math.round(19 * S)}px system-ui, -apple-system, sans-serif`;
+  ctx.fillText(`${birds.toLocaleString('en-GB')} counted`, W - pad, 282 * S);
+
   // The month axis, with the playhead on it.
-  const axW = Math.min(330 * S, W * 0.46), axX = W - pad - axW, axY = 288 * S;
+  const axW = Math.min(330 * S, W * 0.46), axX = W - pad - axW, axY = 318 * S;
   ctx.strokeStyle = C.hair;
   ctx.lineWidth = 1.2 * S;
   ctx.beginPath(); ctx.moveTo(axX, axY); ctx.lineTo(axX + axW, axY); ctx.stroke();
@@ -803,7 +842,8 @@ function drawHud(ctx, t) {
   /* The bar is a fixed number of real pixels tall, so the footer has to be
      too - scaling it with the frame tucked it under the controls on a phone. */
   const foot = Math.max(118, 150 * S);
-  ctx.fillText('Each point is one bird', pad, state.h - foot);
+  ctx.fillText('Points scale with the count, compressed; the figure is exact',
+               pad, state.h - foot);
   ctx.fillStyle = C.secondary;
   ctx.font = `500 ${Math.round(16 * S)}px system-ui, sans-serif`;
   ctx.fillText('Positions between sightings are inferred, not tracked',
@@ -900,6 +940,9 @@ async function loadSpecies(slug) {
   const d = await fetch(`data/migration/${slug}.json`).then((r) => r.json());
   state.d = d;
   state.weeks = d.times.length;
+  flock.birds = [];
+  flock.week = -1;
+  flock.placesByWeek.clear();
   state.t = Math.min(state.t, state.weeks - 1);
   $('scrub').max = state.weeks - 1;
   $('scrub').value = state.t;
@@ -924,6 +967,8 @@ async function boot() {
     return;
   }
   state.geo = geo;
+  // One peak across every species, so the flocks are comparable.
+  state.peakBirds = Math.max(1, ...index.map((i) => i.peakBirds || 0));
 
   const q = new URLSearchParams(location.search);
   const sel = $('species');

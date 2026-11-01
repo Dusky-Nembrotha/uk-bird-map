@@ -123,19 +123,36 @@ def _blur(a, radius, passes):
 
 
 def _weekly_points(rows, weeks, first):
-    """The actual report positions, week by week.
+    """Where the birds were each week, and how many.
 
-    The grid carries the modelled flow; these carry the observations. Drawing
-    both is what the reference does - bright dots are geese somebody saw,
-    lines are where the model says they went - and it keeps the two honestly
-    separate rather than smearing the records into the model.
+    One entry per reported square kilometre, as [lat, lon, birds], rather
+    than one per report. The distinction is the whole thing: a report is a
+    birder. Counting reports made a Yellow-browed Warbler twitched by forty
+    people look like forty warblers.
+
+    Individual counts are on most records; where one is missing the record
+    stands for a single bird, which is the conservative reading. Within a
+    square and a week the largest count wins rather than the sum, because ten
+    birders logging the same flock of two thousand saw two thousand birds
+    between them, not twenty thousand.
     """
-    buckets = [[] for _ in weeks]
-    for (iso, lat, lon, _cnt, _sci, _com, _loc) in rows:
+    buckets = [dict() for _ in weeks]
+    for (iso, lat, lon, cnt, _sci, _com, _loc) in rows:
         w = (date.fromisoformat(iso) - first).days // 7
-        if 0 <= w < len(weeks):
-            buckets[w].extend((round(lat, 2), round(lon, 2)))
-    return buckets
+        if not (0 <= w < len(weeks)):
+            continue
+        key = (round(lat, 2), round(lon, 2))
+        n = cnt if isinstance(cnt, int) and cnt > 0 else 1
+        at = buckets[w]
+        if at.get(key, 0) < n:
+            at[key] = n
+    out = []
+    for at in buckets:
+        flat = []
+        for (lat, lon), n in at.items():
+            flat.extend((lat, lon, n))
+        out.append(flat)
+    return out
 
 
 def _weekly_surfaces(rows, g):
@@ -532,7 +549,10 @@ def build(species, out_path=None, start=None, end=None):
         "arcs": arcs,
         "hotspots": spots,
         "points": points,
-        "units": {"points": "observed report positions, [lat,lon,...] per week",
+        "weekBirds": [sum(wk[2::3]) for wk in points],
+        "units": {
+                  "points": "[lat, lon, birds] per reported square, per week",
+                  "weekBirds": "birds counted that week, peak per square",
                   "arcs": "[fromLat, fromLon, toLat, toLon, share, km] per week",
                   "n": "reports per cell, smoothed, clipped at the "
                        f"{CLIP_PCT:g}th percentile of the year"},
@@ -566,6 +586,7 @@ def _write_index(outdir):
         items.append({"slug": f.stem, "common": d["species"]["common"],
                       "sci": d["species"]["sci"], "records": d["records"],
                       "weeks": len(d["times"]), "movingWeeks": moving,
+                      "peakBirds": max(d.get("weekBirds") or [0]),
                       "complete": d.get("span", {}).get("complete", True)})
     items.sort(key=lambda i: i["common"])
     (outdir / "index.json").write_text(json.dumps(items, separators=(",", ":")))
