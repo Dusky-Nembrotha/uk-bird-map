@@ -62,10 +62,6 @@ function visibleRings() {
     lon > w && lon < e && lat > s && lat < n);
 }
 let MY0, MY1, px, py, lonAt, latAt;
-/* The same projection without the pan and zoom applied. The accumulated
-   tracks are painted in this space once and then drawn through the view
-   transform, so a year of flight lines survives being panned across. */
-let baseX, baseY;
 
 /* The map is vector all the way down - coastlines, reports, journeys and
    labels are all drawn from coordinates every frame - so zooming is a change
@@ -90,7 +86,6 @@ function setProjection(w, h) {
   const bx = (lon) => ox + ((lon - VIEW.west) / (VIEW.east - VIEW.west)) * cw;
   const by = (lat) => oy + ch - ((merc(lat) - MY0) / (MY1 - MY0)) * ch;
 
-  baseX = bx; baseY = by;
   px = (lon) => bx(lon) * view.k + view.tx;
   py = (lat) => by(lat) * view.k + view.ty;
   lonAt = (x) => VIEW.west
@@ -487,12 +482,19 @@ function paintLand(ctx) {
    takes, and worth stating rather than implying. */
 
 const FLOCK_MAX = 900;
-const TRAIL = 22;                 // positions kept
+let TRAIL = 22;                   // positions kept
 // How long the tail is allowed to look, in screen pixels. A bird crossing
 // eight hundred kilometres in twenty frames leaves forty kilometres between
 // one position and the next, and drawing all of them put white beams across
 // the whole map. The tail is walked back from the head until this is spent.
-const TAIL_PX = 42;
+let TAIL_PX = 42;
+
+/* Keep the two in step: a longer tail needs more positions behind it to draw,
+   and a shorter one should not carry the extra. */
+function setTail(px) {
+  TAIL_PX = Math.max(6, Math.min(400, px));
+  TRAIL = Math.max(10, Math.min(200, Math.round(TAIL_PX * 0.55)));
+}
 const WEEK_SECONDS = () => (YEAR_SECONDS / Math.max(1, state.weeks));
 
 const flock = { birds: [], week: -1, placesByWeek: new Map() };
@@ -539,69 +541,7 @@ function speciesInk() {
   return state.ink || (state.ink = inkFor(state.slug || ''));
 }
 
-/* The accumulated year.
 
-   The reference this was built from keeps every track it has drawn, so a year
-   builds into a web and the bottlenecks - Gibraltar, the Bosphorus - appear
-   because that is where the lines actually converge. Ours forgot everything
-   older than twenty-two positions, which is why it read as weather rather
-   than as routes.
-
-   Painted in base projection space at twice the canvas size, then drawn
-   through the view transform. That keeps it O(1) per frame however much
-   history it holds, and means panning does not throw the year away - a
-   segment list redrawn on every settle would, at a few hundred thousand
-   segments, be a visible stall on a phone. */
-const tracks = { canvas: null, ctx: null, scale: 2, w: 0, h: 0, on: true, ink: '' };
-
-function trackLayer(w, h) {
-  if (tracks.canvas && tracks.w === w && tracks.h === h) return tracks.ctx;
-  const c = document.createElement('canvas');
-  c.width = Math.round(w * tracks.scale);
-  c.height = Math.round(h * tracks.scale);
-  tracks.canvas = c;
-  tracks.w = w; tracks.h = h;
-  tracks.ctx = c.getContext('2d');
-  tracks.ctx.setTransform(tracks.scale, 0, 0, tracks.scale, 0, 0);
-  tracks.ctx.lineCap = 'round';
-  tracks.ctx.globalCompositeOperation = 'lighter';
-  return tracks.ctx;
-}
-
-function clearTracks() {
-  if (!tracks.ctx) return;
-  tracks.ctx.save();
-  tracks.ctx.setTransform(1, 0, 0, 1, 0, 0);
-  tracks.ctx.clearRect(0, 0, tracks.canvas.width, tracks.canvas.height);
-  tracks.ctx.restore();
-}
-
-/* One segment per bird per frame, in geographic space. Skipped when a bird
-   has barely moved, so a bird idling at a roost does not burn a hole in the
-   layer. */
-function layTracks() {
-  if (!tracks.on || !state.playing) return;
-  const g = trackLayer(state.w, state.h);
-  if (tracks.ink !== speciesInk()) {
-    tracks.ink = speciesInk();
-    g.strokeStyle = hexA(speciesInk(), 0.22);
-  }
-  g.lineWidth = 0.7;
-  g.beginPath();
-  let drew = 0;
-  for (const b of flock.birds) {
-    if (!b.flying || b.lat === undefined) continue;
-    if (b.tLat !== undefined) {
-      const d = Math.abs(b.lat - b.tLat) + Math.abs(b.lon - b.tLon);
-      if (d < 0.004) continue;            // parked, or crawling
-      g.moveTo(baseX(b.tLon), baseY(b.tLat));
-      g.lineTo(baseX(b.lon), baseY(b.lat));
-      drew++;
-    }
-    b.tLat = b.lat; b.tLon = b.lon;
-  }
-  if (drew) g.stroke();
-}
 
 function hexA(hex, a) {
   const n = parseInt(hex.slice(1), 16);
@@ -613,17 +553,6 @@ function inkRGB(hex) {
   return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
 }
 
-/* The whole year so far, in one blit. The layer is in base projection space,
-   so the view transform is exactly the rectangle the base canvas maps to. */
-function drawTracks(ctx) {
-  if (!tracks.on || !tracks.canvas) return;
-  ctx.save();
-  ctx.globalCompositeOperation = pale() ? 'multiply' : 'lighter';
-  ctx.globalAlpha = pale() ? 0.5 : 0.85;
-  ctx.drawImage(tracks.canvas, view.tx, view.ty,
-                state.w * view.k, state.h * view.k);
-  ctx.restore();
-}
 
 /* One entry per distinct square reported that week, with how often. Cached
    on the data rather than the view, so panning does not recompute it. */
@@ -1194,11 +1123,7 @@ function frame(now) {
   const ctx = state.ctx;
 
   drawLand(ctx);
-  drawTracks(ctx);
   drawFlock(ctx);
-  // After the flock, because drawFlock is what advances the positions. One
-  // frame of latency, which nothing can see.
-  layTracks();
   drawHotspots(ctx);
   drawHud(ctx, state.t);
 
@@ -1213,9 +1138,6 @@ function frame(now) {
     state.t += dt * (state.weeks / (YEAR_SECONDS * 60));
     if (state.t >= state.weeks - 1) {
       state.t = 0;
-      // A new year starts on a clean map rather than painting over the last.
-      clearTracks();
-      for (const b of flock.birds) { b.tLat = undefined; b.tLon = undefined; }
     }
     $('scrub').value = state.t;
     $('when').textContent = state.d.times[Math.round(state.t)];
@@ -1277,9 +1199,6 @@ async function loadSpecies(slug) {
   flock.birds = [];
   flock.week = -1;
   flock.placesByWeek.clear();
-  // Another bird's year must not be left drawn under this one's.
-  clearTracks();
-  tracks.ink = '';
   birdSpriteKey = '';
   /* Back to the start, and running. Picking a new bird mid-January and being
      dropped into its January is disorienting: you asked to see its year. */
@@ -1349,8 +1268,14 @@ async function boot() {
     state.basemap = wantMap;
     $('basemap').value = wantMap;
   }
-  // ?tracks=0 for the old behaviour, where only the last few positions show.
-  tracks.on = q.get('tracks') !== '0';
+  /* ?trails=<pixels> to lengthen or shorten the comet tails. An accumulating
+     layer was tried here and taken out again: fading it with destination-out
+     cannot clear the last quantisation level, so however fast the decay was
+     set, a faint permanent web was left behind - measured at 7.73% of the
+     layer lit with no decay against 7.76% at a 0.6s half-life. The per-bird
+     ring buffer below has no such floor, because it simply stops drawing. */
+  const wantTrail = +q.get('trails');
+  if (wantTrail > 0) setTail(wantTrail);
   if (q.get('ground') === 'full') GROUND_MUTE = null;
   // So the nav, which sits on the map rather than on a panel, can follow the
   // ground along with everything else drawn there.

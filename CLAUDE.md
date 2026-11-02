@@ -34,14 +34,19 @@ top-right corner at first and covered the studio's menu button. A page can set
 `data-install-class` and `data-install-label` on the slot to match its own
 buttons; with no slot, `pwa.js` falls back to a floating pill that times out.
 
-**Tracks accumulate.** The year builds into a web of routes rather than fading
-after twenty-two positions, painted into an offscreen layer in base projection
-space and blitted through the view transform — O(1) per frame however much
-history it holds. Cleared on species change and at each year wrap. `?tracks=0`
-restores the old fading tails. Each species keeps a colour from `SPECIES_INK`,
-a categorical set validated with the dataviz skill's `validate_palette.js`
-against the near-black surface; `?ground=full` turns off the desaturation that
-pushes the satellite imagery back under the flock.
+**Trails fade; they do not accumulate.** An accumulating layer was built from
+a reference Charlie liked and then taken out again at his request — the year
+should not build into a permanent web. Worth knowing if it is ever revisited:
+fading such a layer with `destination-out` **cannot work**, because it cannot
+clear the last quantisation level. Measured 7.73% of the layer lit with no
+decay against 7.76% at a 0.6s half-life — the faint web survives any decay
+rate. Use a bounded ring buffer, as the per-bird tails do, not an alpha fade.
+`?trails=<pixels>` tunes the tail length (default 42).
+
+Each species keeps a colour from `SPECIES_INK`, a categorical set validated
+with the dataviz skill's `validate_palette.js` against the near-black surface.
+`?ground=full` turns off the desaturation that pushes the satellite imagery
+back under the flock.
 
 ---
 
