@@ -28,7 +28,11 @@ Three views, all served from `web/`:
 | `index.html` + `studio.js` | The animation studio for the rolling 30-day data. |
 
 Installable as a PWA: `manifest.webmanifest`, `sw.js`, `pwa.js`, `icons/`
-(regenerate the icons with `python3 -m src.icons`).
+(regenerate the icons with `python3 -m src.icons`). The install button mounts
+into each page's own controls via a `#install-slot` element — it floated in the
+top-right corner at first and covered the studio's menu button. A page can set
+`data-install-class` and `data-install-label` on the slot to match its own
+buttons; with no slot, `pwa.js` falls back to a floating pill that times out.
 
 **Tracks accumulate.** The year builds into a web of routes rather than fading
 after twenty-two positions, painted into an offscreen layer in base projection

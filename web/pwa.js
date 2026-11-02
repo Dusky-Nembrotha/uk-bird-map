@@ -57,12 +57,39 @@
 
     btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = 'Install';
     btn.setAttribute('aria-label', 'Install UK Bird Map as an app');
+    btn.addEventListener('click', async () => {
+      const p = deferred;
+      dismiss();
+      if (!p) return;
+      p.prompt();
+      try { await p.userChoice; } catch (err) { /* dismissed */ }
+      deferred = null;
+    });
+
+    /* Mounted into the page's own controls where it has somewhere to live,
+       and only floated over the map where it has not.
+
+       It used to float on every page, which put a lime pill in the top right
+       corner of all three - over the migration view's header, and over
+       whatever each layout keeps in that corner. A button that covers a
+       control is worse than one that is slightly harder to find. */
+    const slot = document.getElementById('install-slot');
+    if (slot) {
+      btn.textContent = slot.dataset.installLabel || 'Install';
+      if (slot.dataset.installClass) btn.className = slot.dataset.installClass;
+      btn.title = 'Install as an app';
+      slot.appendChild(btn);
+      // Left in place: sitting in the controls, it is covering nothing, so
+      // there is nothing to time out.
+      return;
+    }
+
+    btn.textContent = 'Install';
     Object.assign(btn.style, {
       position: 'fixed',
       right: 'calc(12px + env(safe-area-inset-right))',
-      top: 'calc(12px + env(safe-area-inset-top))',
+      bottom: 'calc(12px + env(safe-area-inset-bottom))',
       zIndex: '2147483000',
       font: '600 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif',
       color: '#07090c',
@@ -73,18 +100,8 @@
       boxShadow: '0 2px 14px rgba(0, 0, 0, .45)',
       cursor: 'pointer',
     });
-
-    btn.addEventListener('click', async () => {
-      const p = deferred;
-      dismiss();
-      if (!p) return;
-      p.prompt();
-      try { await p.userChoice; } catch (err) { /* dismissed */ }
-      deferred = null;
-    });
-
     document.body.appendChild(btn);
-    // Not a permanent fixture on top of the map.
+    // Floating, it is over the map, so it takes itself away.
     setTimeout(() => {
       if (!btn) return;
       sessionStorage.setItem('install-dismissed', '1');
