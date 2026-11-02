@@ -23,3 +23,6 @@ __pycache__/
 
 # Downloaded observation photos (cached from iNaturalist etc.)
 data/photos/
+
+# Local Claude Code session settings (model, effort) - not project config.
+.claude/
