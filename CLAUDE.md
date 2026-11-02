@@ -108,9 +108,15 @@ eBird-via-GBIF records.
 
 Things that have already cost hours.
 
-**GBIF throttles sustained bulk paging.** After several hours of `src.backfill`,
-the same query that took 0.58s takes >420s, and restarting does not clear it. It
-is not deep offsets, not the geometry polygon, and not our code. Diagnose with
+**GBIF throttles sustained bulk paging, *and* deep offsets fall off a cliff.**
+Both are real and they are easy to confuse. After several hours of
+`src.backfill` the same query that took 0.58s takes >420s even at offset 0, and
+restarting does not clear it — that is the throttle. Separately, on a
+responsive morning, offset 5,000 returned in 0.9s (333 rec/s) while offset
+20,000 did not return in 110s — that is the depth cliff, and it is why the
+paged fetcher could never have coped with Wood Pigeon (1.1M records) or
+Blackcap. The geometry polygon is *not* a factor, and nor is our code. Diagnose
+with
 `ps -o pid,etime,time` — 30 seconds of CPU against 6 hours elapsed means waiting
 on I/O, not working; `/proc/<pid>/io` rchar delta gives live throughput (healthy
 ≈ 500 records/sec, throttled ≈ 2–4 KB/sec).
