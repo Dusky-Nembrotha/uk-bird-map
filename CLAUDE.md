@@ -60,7 +60,11 @@ future species and every future change.
 Three steps, in order. Steps 2 and 3 are cheap; step 1 is the slow one.
 
 ```bash
-# 1. Fetch one species' year into data/migration.db
+# 1. Fetch species-years into data/migration.db. Prefer the download API:
+#    one request covers every species named, and it is not throttled.
+python3 -m src.gbif_download --species "Turdus iliacus" "Grus grus" \
+                             --from 2024-09-01 --to 2025-08-31
+#    …or the old paged fetcher, one species at a time (see the trap below)
 python3 -m src.backfill  --species "Turdus iliacus" --from 2024-09-01 --to 2025-08-31
 
 # 2. Rebuild web/data/migration/<slug>.json for everything in that database
@@ -109,10 +113,16 @@ the same query that took 0.58s takes >420s, and restarting does not clear it. It
 is not deep offsets, not the geometry polygon, and not our code. Diagnose with
 `ps -o pid,etime,time` — 30 seconds of CPU against 6 hours elapsed means waiting
 on I/O, not working; `/proc/<pid>/io` rchar delta gives live throughput (healthy
-≈ 500 records/sec, throttled ≈ 2–4 KB/sec). The real fix is GBIF's
-**occurrence download API** (needs a free GBIF account), which also removes the
-`MAX_OFFSET = 100_000` ceiling that currently truncates abundant species
-silently. *This is the next piece of work and Charlie has agreed to it.*
+≈ 500 records/sec, throttled ≈ 2–4 KB/sec).
+
+**Use `src.gbif_download` instead.** It posts a predicate to GBIF's download
+API, waits for the zip to be built server-side and loads it in one go — not
+throttled, and free of the `MAX_OFFSET = 100_000` ceiling that silently
+truncates any species-month above it. It needs a free GBIF account in
+`config.json` under `gbif.username` / `gbif.password` (or `GBIF_USER` /
+`GBIF_PASS`). All species named go into **one** download — GBIF charges the
+same wait for one species or twenty. Downloads survive the process; resume an
+interrupted one with `--key`.
 
 **`WORKERS = 1` in `src/backfill.py`, and leave it there.** Six workers stalled
 for 1h47m having written one month; serial pulled 70,000 records in 70 seconds.
@@ -182,7 +192,9 @@ and Blackcap (500,529) are deliberately held back as too large for the current
 fetcher.
 
 **Open threads**
-- GBIF download API — agreed, not yet built. Needs Charlie's free GBIF account.
+- GBIF download API — **built** (`src/gbif_download.py`), but never yet run
+  end-to-end: it is waiting on Charlie creating a free GBIF account. The
+  request/poll/parse path is untested against the live service.
 - `docs/flyway-reference.md` holds source-backed flyway references and draft
   `SPECIES` entries for **six coastal waders** (Knot, Sanderling, Bar-tailed
   and Black-tailed Godwit, Grey Plover, Turnstone), with conflicts and gaps
