@@ -20,6 +20,7 @@ const state = {
   w: 0, h: 0, dpr: 1,
   basemap: 'satellite',
   clock: 0,          // seconds of playback, not of wall time
+  slug: '', ink: '', // which bird, and the colour it keeps
 };
 
 /* The view. Britain, Iceland and the Norwegian Sea - the triangle this
@@ -40,6 +41,12 @@ const VIEW = { west: -25, east: 22, south: 49, north: 70 };
 let YEAR_SECONDS = 40;        // ?speed= divides this, for a quick look through
 const daysPerFrame = () => (state.weeks * 7) / (YEAR_SECONDS * 60);
 
+/* How far the satellite ground is pushed back under the flock. Tuned against
+   the imagery rather than against a swatch: the heat ramp was once validated
+   on a dark UI panel and then put on top of bright ocean, where it vanished.
+   ?ground=full turns it off. */
+let GROUND_MUTE = { sat: 0.45, val: 0.66 };
+
 const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
 
 /* Is this ring anywhere near what is on screen right now? Everything that
@@ -55,6 +62,10 @@ function visibleRings() {
     lon > w && lon < e && lat > s && lat < n);
 }
 let MY0, MY1, px, py, lonAt, latAt;
+/* The same projection without the pan and zoom applied. The accumulated
+   tracks are painted in this space once and then drawn through the view
+   transform, so a year of flight lines survives being panned across. */
+let baseX, baseY;
 
 /* The map is vector all the way down - coastlines, reports, journeys and
    labels are all drawn from coordinates every frame - so zooming is a change
@@ -79,6 +90,7 @@ function setProjection(w, h) {
   const bx = (lon) => ox + ((lon - VIEW.west) / (VIEW.east - VIEW.west)) * cw;
   const by = (lat) => oy + ch - ((merc(lat) - MY0) / (MY1 - MY0)) * ch;
 
+  baseX = bx; baseY = by;
   px = (lon) => bx(lon) * view.k + view.tx;
   py = (lat) => by(lat) * view.k + view.ty;
   lonAt = (x) => VIEW.west
@@ -399,6 +411,15 @@ function paintLand(ctx) {
   if (tiles.canvas) {
     ctx.save();
     ctx.globalAlpha = tiles.dim;
+    /* Push the ground back so the birds can come forward. The reference this
+       was built from reads so well partly because its terrain is almost
+       monochrome: thin coloured tracks over a bright teal ocean simply
+       disappear. Desaturating needs a canvas filter, which not every browser
+       has, so the dim above carries the darkening on its own where it is
+       missing rather than the map arriving fully saturated. */
+    if (!pale() && GROUND_MUTE && 'filter' in ctx) {
+      ctx.filter = `saturate(${GROUND_MUTE.sat}) brightness(${GROUND_MUTE.val})`;
+    }
     const tv = tiles.view;
     if (tv && (tv.k !== view.k || tv.tx !== view.tx || tv.ty !== view.ty)) {
       // Shift and scale what we have onto where we are now looking, so the
@@ -475,6 +496,134 @@ const TAIL_PX = 42;
 const WEEK_SECONDS = () => (YEAR_SECONDS / Math.max(1, state.weeks));
 
 const flock = { birds: [], week: -1, placesByWeek: new Map() };
+
+/* Colour carries which bird it is, not how many or how fast.
+
+   One species is on screen at a time, so this is identity rather than a
+   scale: a categorical set, assigned in a fixed order and never generated,
+   so a species keeps its colour whatever else is on the menu. Validated with
+   scripts/validate_palette.js against the near-black the map sits on - pairs
+   are separated for normal vision and for the three common colour-vision
+   deficiencies, which matters the moment two species share a frame.
+
+   Stepped from OKLCH at L 0.66, C 0.13 and ordered so that neighbours sit
+   across the wheel from each other, because the checks are run on adjacent
+   pairs - which is also how a legend is read. The first palette here was
+   eyeballed and failed four of the five checks, worst of them a rose and a
+   teal 1.9 apart under deuteranopia: two species that a red-green colourblind
+   viewer could not have told apart at all. */
+const SPECIES_INK = [
+  '#d56e78',  // rose
+  '#00aaab',  // teal
+  '#cb7d34',  // amber
+  '#359bd9',  // blue
+  '#9e9621',  // olive
+  '#8b85de',  // violet
+  '#4fa866',  // green
+  '#be73b8',  // magenta
+];
+
+/* A stable hash, so a species keeps its colour between visits and between
+   deploys - index into the menu would repaint every bird each time a new
+   species is added. */
+function inkFor(slug) {
+  let h = 0;
+  for (let i = 0; i < (slug || '').length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0;
+  return SPECIES_INK[h % SPECIES_INK.length];
+}
+
+/* Named for the species, not just 'ink': the HUD already has an ink() of its
+   own for text tones, and a second one quietly won the hoist and handed the
+   sprite a palette object where it wanted a hex string. */
+function speciesInk() {
+  return state.ink || (state.ink = inkFor(state.slug || ''));
+}
+
+/* The accumulated year.
+
+   The reference this was built from keeps every track it has drawn, so a year
+   builds into a web and the bottlenecks - Gibraltar, the Bosphorus - appear
+   because that is where the lines actually converge. Ours forgot everything
+   older than twenty-two positions, which is why it read as weather rather
+   than as routes.
+
+   Painted in base projection space at twice the canvas size, then drawn
+   through the view transform. That keeps it O(1) per frame however much
+   history it holds, and means panning does not throw the year away - a
+   segment list redrawn on every settle would, at a few hundred thousand
+   segments, be a visible stall on a phone. */
+const tracks = { canvas: null, ctx: null, scale: 2, w: 0, h: 0, on: true, ink: '' };
+
+function trackLayer(w, h) {
+  if (tracks.canvas && tracks.w === w && tracks.h === h) return tracks.ctx;
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * tracks.scale);
+  c.height = Math.round(h * tracks.scale);
+  tracks.canvas = c;
+  tracks.w = w; tracks.h = h;
+  tracks.ctx = c.getContext('2d');
+  tracks.ctx.setTransform(tracks.scale, 0, 0, tracks.scale, 0, 0);
+  tracks.ctx.lineCap = 'round';
+  tracks.ctx.globalCompositeOperation = 'lighter';
+  return tracks.ctx;
+}
+
+function clearTracks() {
+  if (!tracks.ctx) return;
+  tracks.ctx.save();
+  tracks.ctx.setTransform(1, 0, 0, 1, 0, 0);
+  tracks.ctx.clearRect(0, 0, tracks.canvas.width, tracks.canvas.height);
+  tracks.ctx.restore();
+}
+
+/* One segment per bird per frame, in geographic space. Skipped when a bird
+   has barely moved, so a bird idling at a roost does not burn a hole in the
+   layer. */
+function layTracks() {
+  if (!tracks.on || !state.playing) return;
+  const g = trackLayer(state.w, state.h);
+  if (tracks.ink !== speciesInk()) {
+    tracks.ink = speciesInk();
+    g.strokeStyle = hexA(speciesInk(), 0.22);
+  }
+  g.lineWidth = 0.7;
+  g.beginPath();
+  let drew = 0;
+  for (const b of flock.birds) {
+    if (!b.flying || b.lat === undefined) continue;
+    if (b.tLat !== undefined) {
+      const d = Math.abs(b.lat - b.tLat) + Math.abs(b.lon - b.tLon);
+      if (d < 0.004) continue;            // parked, or crawling
+      g.moveTo(baseX(b.tLon), baseY(b.tLat));
+      g.lineTo(baseX(b.lon), baseY(b.lat));
+      drew++;
+    }
+    b.tLat = b.lat; b.tLon = b.lon;
+  }
+  if (drew) g.stroke();
+}
+
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+function inkRGB(hex) {
+  const n = parseInt((hex || speciesInk()).slice(1), 16);
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+}
+
+/* The whole year so far, in one blit. The layer is in base projection space,
+   so the view transform is exactly the rectangle the base canvas maps to. */
+function drawTracks(ctx) {
+  if (!tracks.on || !tracks.canvas) return;
+  ctx.save();
+  ctx.globalCompositeOperation = pale() ? 'multiply' : 'lighter';
+  ctx.globalAlpha = pale() ? 0.5 : 0.85;
+  ctx.drawImage(tracks.canvas, view.tx, view.ty,
+                state.w * view.k, state.h * view.k);
+  ctx.restore();
+}
 
 /* One entry per distinct square reported that week, with how often. Cached
    on the data rather than the view, so panning does not recompute it. */
@@ -771,15 +920,19 @@ function updateFlock() {
    per bird per frame is what crashed the page the first time. */
 let birdSprite = null, birdSpriteKey = '';
 function sprite() {
-  const key = `${pale()}:${state.dpr}`;
+  const key = `${pale()}:${state.dpr}:${speciesInk()}`;
   if (birdSprite && birdSpriteKey === key) return birdSprite;
   const R = 6;
   const c = document.createElement('canvas');
   c.width = c.height = R * 2 * state.dpr;
   const g = c.getContext('2d');
   g.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
-  const halo = pale() ? '20, 60, 110' : '214, 232, 252';
-  const core = pale() ? '12, 48, 92' : '244, 250, 255';
+  /* The glow carries the species, the core stays white-hot. A bird is a point
+     of light first and a category second: tint the core and a crowd turns to
+     mush, tint only the halo and the identity reads while the mark stays
+     crisp. */
+  const halo = pale() ? '20, 60, 110' : inkRGB();
+  const core = pale() ? '12, 48, 92' : '250, 252, 255';
   const rg = g.createRadialGradient(R, R, 0, R, R, R);
   // Enough bloom to seat a bird on the imagery, not enough that a roost of
   // forty merges into one lamp. Crisp cores are what let a crowd still read
@@ -802,7 +955,7 @@ function drawFlock(ctx) {
   ctx.globalCompositeOperation = pale() ? 'multiply' : 'lighter';
 
   // Tails first, so a bird sits on the head of its own trail.
-  const rgb = pale() ? '20, 70, 125' : '226, 240, 255';
+  const rgb = pale() ? '20, 70, 125' : inkRGB();
   const batches = new Map();
   for (const b of flock.birds) {
     if (!b.flying || b.trail.length < 4) continue;
@@ -1041,7 +1194,11 @@ function frame(now) {
   const ctx = state.ctx;
 
   drawLand(ctx);
+  drawTracks(ctx);
   drawFlock(ctx);
+  // After the flock, because drawFlock is what advances the positions. One
+  // frame of latency, which nothing can see.
+  layTracks();
   drawHotspots(ctx);
   drawHud(ctx, state.t);
 
@@ -1054,7 +1211,12 @@ function frame(now) {
     state.clock += dt / 60;
     // A year in about forty seconds.
     state.t += dt * (state.weeks / (YEAR_SECONDS * 60));
-    if (state.t >= state.weeks - 1) state.t = 0;
+    if (state.t >= state.weeks - 1) {
+      state.t = 0;
+      // A new year starts on a clean map rather than painting over the last.
+      clearTracks();
+      for (const b of flock.birds) { b.tLat = undefined; b.tLon = undefined; }
+    }
     $('scrub').value = state.t;
     $('when').textContent = state.d.times[Math.round(state.t)];
   }
@@ -1110,9 +1272,15 @@ async function loadSpecies(slug) {
   const d = await fetch(`data/migration/${slug}.json`).then((r) => r.json());
   state.d = d;
   state.weeks = d.times.length;
+  state.slug = slug;
+  state.ink = inkFor(slug);
   flock.birds = [];
   flock.week = -1;
   flock.placesByWeek.clear();
+  // Another bird's year must not be left drawn under this one's.
+  clearTracks();
+  tracks.ink = '';
+  birdSpriteKey = '';
   /* Back to the start, and running. Picking a new bird mid-January and being
      dropped into its January is disorienting: you asked to see its year. */
   state.t = 0;
@@ -1181,6 +1349,9 @@ async function boot() {
     state.basemap = wantMap;
     $('basemap').value = wantMap;
   }
+  // ?tracks=0 for the old behaviour, where only the last few positions show.
+  tracks.on = q.get('tracks') !== '0';
+  if (q.get('ground') === 'full') GROUND_MUTE = null;
   // So the nav, which sits on the map rather than on a panel, can follow the
   // ground along with everything else drawn there.
   document.body.classList.toggle('pale', pale());

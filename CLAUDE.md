@@ -30,6 +30,15 @@ Three views, all served from `web/`:
 Installable as a PWA: `manifest.webmanifest`, `sw.js`, `pwa.js`, `icons/`
 (regenerate the icons with `python3 -m src.icons`).
 
+**Tracks accumulate.** The year builds into a web of routes rather than fading
+after twenty-two positions, painted into an offscreen layer in base projection
+space and blitted through the view transform — O(1) per frame however much
+history it holds. Cleared on species change and at each year wrap. `?tracks=0`
+restores the old fading tails. Each species keeps a colour from `SPECIES_INK`,
+a categorical set validated with the dataviz skill's `validate_palette.js`
+against the near-black surface; `?ground=full` turns off the desaturation that
+pushes the satellite imagery back under the flock.
+
 ---
 
 ## Charlie's standing instructions
@@ -165,6 +174,12 @@ Use a complete year that ended before the publication lag — currently
 `createRadialGradient` calls per frame (~70k/sec) plus 3,134 strokes. It now
 blits one cached sprite per bird and batches tails into Path2D buckets — about
 15 strokes a frame. Don't reintroduce per-frame gradient creation.
+
+**`migration.js` is one long classic script, so top-level `const`/`function`
+share one scope.** A new `ink()` for species colour silently lost the hoist to
+an existing `ink()` that returns the HUD's text tones, and the sprite got a
+palette object where it wanted a hex string — the whole map went black with no
+error in the obvious places. Grep before naming anything new in that file.
 
 **`state.clock`, not wall-clock.** Pause must stop *all* motion; using `now`
 left the comets running while the clip was paused.
