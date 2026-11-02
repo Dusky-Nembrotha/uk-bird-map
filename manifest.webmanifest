@@ -1,0 +1,26 @@
+{
+  "name": "UK Bird Map",
+  "short_name": "Bird Map",
+  "description": "Bird sightings across Britain and Europe, and a year of migration animated from them.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#07090c",
+  "background_color": "#07090c",
+  "categories": ["education", "travel", "utilities"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "A year of migration", "short_name": "Migration", "url": "migration.html",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Sightings map", "short_name": "Map", "url": "map.html",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Animation studio", "short_name": "Studio", "url": "index.html",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

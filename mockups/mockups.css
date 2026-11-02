@@ -1,0 +1,104 @@
+/* Design study for the UK Bird Map. Dark surface throughout: these are night
+   maps, and a sequential ramp whose low end recedes into the surface only
+   works if the surface is the dark end. */
+
+.viz-root {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --page:      #0d0d0d;
+  --sea:       #0f1317;
+  --land:      #1f2321;
+  --coast:     rgba(240, 239, 236, .14);
+  --text-primary:   #f0efec;
+  --text-secondary: #c3c2b7;
+  --muted:     #898781;
+  --gridline:  #2c2c2a;
+  --border:    rgba(255, 255, 255, .10);
+  --accent:    #a9e34b;
+
+  /* One hue, lightness strictly rising. Generated in OKLCH, not hand-picked. */
+  --d0: #351e01; --d1: #5a2d00; --d2: #803d00; --d3: #a35100; --d4: #c36900;
+  --d5: #de8700; --d6: #f2a74e; --d7: #ffc98d; --d8: #ffeccb;
+
+  /* Categorical: the three dark-mode slots that clear the all-pairs gates. */
+  --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-other: #6b6a65;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0; background: var(--page); color: var(--text-primary);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+header#intro { max-width: 760px; margin: 0 auto; padding: 72px 28px 40px; }
+.eyebrow {
+  margin: 0 0 10px; text-transform: uppercase; letter-spacing: .14em;
+  font-size: 11px; font-weight: 650; color: var(--accent);
+}
+h1 { margin: 0 0 16px; font-size: 38px; line-height: 1.12; letter-spacing: -.022em;
+     font-weight: 680; }
+.lede { margin: 0; color: var(--text-secondary); font-size: 17px; }
+.lede strong { color: var(--text-primary); font-weight: 650; }
+
+main { max-width: 1180px; margin: 0 auto; padding: 0 28px 40px; }
+
+.mock {
+  margin: 0 0 64px; border: 1px solid var(--border); border-radius: 16px;
+  background: var(--surface-1); overflow: hidden;
+}
+.mock-head { padding: 26px 28px 20px; display: grid; gap: 8px; }
+.mock-head .no {
+  font-size: 11px; font-weight: 700; letter-spacing: .14em;
+  color: var(--muted); text-transform: uppercase;
+}
+.mock-head h2 { margin: 0; font-size: 25px; letter-spacing: -.018em; font-weight: 670; }
+.mock-head p { margin: 0; color: var(--text-secondary); max-width: 68ch; }
+
+.mock-figure { position: relative; background: var(--sea); }
+.mock-figure canvas { display: block; width: 100%; height: auto; }
+
+.mock-foot {
+  display: flex; flex-wrap: wrap; gap: 20px 32px; align-items: flex-start;
+  padding: 18px 28px 26px; border-top: 1px solid var(--gridline);
+}
+
+/* --- legends ------------------------------------------------------------ */
+
+.legend { display: grid; gap: 7px; }
+.legend-title {
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); font-weight: 650;
+}
+.ramp { display: flex; align-items: center; gap: 0; }
+.ramp i { width: 30px; height: 11px; display: block; }
+.ramp i:first-child { border-radius: 3px 0 0 3px; }
+.ramp i:last-child { border-radius: 0 3px 3px 0; }
+.ramp-ends {
+  display: flex; justify-content: space-between; font-size: 12px;
+  color: var(--text-secondary); margin-top: 2px;
+}
+.keys { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.key { display: flex; align-items: center; gap: 7px; font-size: 13px;
+       color: var(--text-secondary); }
+.key span.sw { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.key span.sw.ring { border-radius: 50%; box-shadow: 0 0 0 2px var(--surface-1); }
+.note { font-size: 13px; color: var(--muted); max-width: 46ch; }
+
+footer {
+  max-width: 1180px; margin: 0 auto; padding: 28px 28px 80px;
+  border-top: 1px solid var(--gridline); color: var(--muted); font-size: 13px;
+}
+footer p { margin: 0; max-width: 80ch; }
+
+/* --- single-mockup mode, for screenshots -------------------------------- */
+
+body.solo { background: var(--surface-1); }
+body.solo header#intro, body.solo footer { display: none; }
+body.solo main { max-width: none; padding: 0; }
+body.solo .mock { margin: 0; border: 0; border-radius: 0; }
+
+.loading {
+  padding: 80px 28px; color: var(--muted); font-size: 14px;
+}
